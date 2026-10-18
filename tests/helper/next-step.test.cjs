@@ -358,6 +358,19 @@ describe('nextStep', () => {
     assert.ok(!next.line.includes('launch it again'), next.line);
   });
 
+  test('a finished Codex job whose result was never fetched -> codex result, not a relaunch', () => {
+    const state = makeState({ stage: 'test', workers: { tester: 'running' } });
+    const next = nextStep(state, { ...facts(), finishedJobs: ['tester-ab12'] });
+    assert.deepEqual(next, {
+      section: 'Test',
+      line: `first run node ${HELPER} codex result <job> for each of tester-ab12, then run resume ${ID} for the next step`,
+    });
+    const both = nextStep(state, { ...facts([], ['reviewer-c3d4']), finishedJobs: ['tester-ab12'] });
+    assert.equal(both.line, `first run node ${HELPER} codex wait reviewer-c3d4, then codex result <job> for each of those jobs `
+      + `and for tester-ab12, then run resume ${ID} for the next step`);
+    assert.ok(!next.line.includes('launch it again') && !both.line.includes('launch it again'));
+  });
+
   test('task ids that are not T<n> or D<n> are never printed', () => {
     const tasks = [T('T1;rm -rf x', 'implementer', 1), T('T2', 'implementer', 1)];
     const next = nextStep(makeState({ stage: 'implement', tasks }), facts());
@@ -438,6 +451,46 @@ describe('runFacts', () => {
       const f = runFacts(root, review);
       assert.deepEqual(f.briefedSinceMerge, ['implementer-T1']);
       assert.ok(nextStep(review, f).line.includes('--fix for each of implementer-T1,'), nextStep(review, f).line);
+    } finally {
+      removeDir(root);
+    }
+  });
+
+  test('lists a finished Codex job of this brief whose worker has no report yet', () => {
+    const root = makeTempDir('neat-next-');
+    try {
+      const state = rs.createRun(root, { task: 'facts', mode: 'gate' }, new Date('2026-10-18T12:00:00Z'));
+      const dir = rs.runDir(root, state.id);
+      const jobsDir = path.join(dir, 'jobs');
+      fs.mkdirSync(jobsDir);
+      const at = (file, sec) => {
+        fs.writeFileSync(file, 'x');
+        fs.utimesSync(file, sec, sec);
+      };
+      const job = (id, worker, status, sec) => {
+        fs.writeFileSync(path.join(jobsDir, `${id}.json`), JSON.stringify({
+          id, runId: state.id, worker, status, mode: 'bg', sandbox: 'read-only', pid: null, pgid: null,
+        }));
+        at(path.join(jobsDir, `${id}.prompt.md`), sec);
+      };
+      at(path.join(dir, 'brief-tester.md'), 1000);
+      at(path.join(dir, 'brief-explorer.md'), 1000);
+      at(path.join(dir, 'brief-reviewer.md'), 1000);
+      job('tester-0aa1', 'tester', 'failed', 500); // an earlier brief's job
+      job('tester-0bb2', 'tester', 'done', 1100);
+      job('explorer-0cc3', 'explorer', 'done', 1100);
+      at(path.join(dir, 'report-explorer.md'), 1200); // its result was fetched
+      job('reviewer-0dd4', 'reviewer', 'cancelled', 1100);
+      const workers = ['tester', 'explorer', 'reviewer'].map((name) => ({ name, status: 'running' }));
+      const running = { ...state, stage: 'test', workers };
+      const f = runFacts(root, running);
+      assert.deepEqual(f.finishedJobs, ['tester-0bb2']);
+      assert.ok(nextStep(running, f).line.includes('codex result <job> for each of tester-0bb2,'), nextStep(running, f).line);
+      const checked = { ...running, workers: workers.map((w) => ({ ...w, status: w.name === 'tester' ? 'failed' : w.status })) };
+      assert.deepEqual(runFacts(root, checked).finishedJobs, []);
+      job('tester-0ee5', 'tester', 'running', 1300);
+      assert.deepEqual(runFacts(root, running).finishedJobs, []);
+      assert.deepEqual(runFacts(root, running).runningJobs, ['tester-0ee5']);
     } finally {
       removeDir(root);
     }

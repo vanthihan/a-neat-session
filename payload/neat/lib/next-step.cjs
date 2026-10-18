@@ -241,15 +241,22 @@ function pipelineStep(state, facts) {
     || askContinue(state, stage, advance(state, stage));
 }
 
-// A running Codex job of the run must be waited for before anything else.
-// The step computed now predates the job's report (it would relaunch the
+// A running Codex job of the run must be waited for, and a finished job whose
+// result was never fetched needs `codex result`, before anything else. The
+// step computed now predates those jobs' reports (it would relaunch the
 // worker), so only the wait, the results and a fresh `run resume` are named.
 function withJobs(next, facts, id) {
-  const jobs = facts.runningJobs || [];
-  if (!next.section || jobs.length === 0) return next;
+  const running = facts.runningJobs || [];
+  const finished = facts.finishedJobs || [];
+  if (!next.section || running.length + finished.length === 0) return next;
   const helper = facts.helper || HELPER;
-  return step(next.section, `first run node ${helper} codex wait ${jobs.join(' ')}, then codex result <job> for each of those jobs, `
-    + `then run resume ${id} for the next step`);
+  const again = `then run resume ${id} for the next step`;
+  if (running.length === 0) {
+    return step(next.section, `first run node ${helper} codex result <job> for each of ${finished.join(' ')}, ${again}`);
+  }
+  const also = finished.length > 0 ? ` and for ${finished.join(' ')}` : '';
+  return step(next.section, `first run node ${helper} codex wait ${running.join(' ')}, then codex result <job> for each of those jobs${also}, `
+    + again);
 }
 
 // { section, line }; section is null when there is nothing to resume.
@@ -333,11 +340,35 @@ function runFiles(root, id) {
   }
 }
 
-// Ids of this run's Codex jobs whose record says running. The job module is
-// loaded only here, when a next step is actually computed.
-function runningJobIds(root, id) {
+// This run's Codex job records, newest first. The job module is loaded only
+// here, when a next step is actually computed.
+function runJobRecords(root, id) {
   const jobs = require('./jobs.cjs');
-  return jobs.listJobs(root).filter((r) => r.runId === id && r.status === 'running').map((r) => r.id);
+  return jobs.listJobs(root).filter((r) => r.runId === id);
+}
+
+// Ids of the jobs whose record says running.
+function runningJobIds(records) {
+  return records.filter((r) => r.status === 'running').map((r) => r.id);
+}
+
+// Ids of finished jobs whose result was never fetched: the newest job of its
+// worker, done or failed (a cancelled job counts as a failed worker), started
+// after the worker's current brief, while the worker has no current report
+// and has not been checked yet.
+function finishedJobIds(records, state, dir, reports) {
+  const seen = new Set();
+  const ids = [];
+  for (const r of records) {
+    if (seen.has(r.worker)) continue;
+    seen.add(r.worker);
+    if (!['done', 'failed'].includes(r.status) || reports.includes(`report-${r.worker}.md`)) continue;
+    if (CHECKED.includes(workerStatus(state, r.worker))) continue;
+    const brief = mtimeMs(path.join(dir, `brief-${r.worker}.md`));
+    const started = mtimeMs(r.promptPath);
+    if (brief === null || (started !== null && started >= brief)) ids.push(r.id);
+  }
+  return ids;
 }
 
 // The status word of a report file (read up to MAX_REPORT_READ bytes), or
@@ -390,7 +421,8 @@ function briefedSinceMerge(dir, files) {
 
 // Disk facts nextStep needs: this round's report file names, each report's
 // status word (by worker), the workers briefed since the last review merge,
-// running Codex jobs, helper path.
+// running Codex jobs, finished jobs whose result was never fetched, helper
+// path.
 function runFacts(root, state) {
   const dir = runState.runDir(root, state.id);
   const files = runFiles(root, state.id);
@@ -402,11 +434,13 @@ function runFacts(root, state) {
     const worker = name.slice('report-'.length, -'.md'.length);
     if (runState.WORKER_NAME.test(worker)) statuses[worker] = fileStatus(path.join(dir, name)) || 'invalid';
   }
+  const records = runJobRecords(root, state.id);
   return {
     reports,
     statuses,
     briefedSinceMerge: briefedSinceMerge(dir, files),
-    runningJobs: runningJobIds(root, state.id),
+    runningJobs: runningJobIds(records),
+    finishedJobs: finishedJobIds(records, state, dir, reports),
     helper: HELPER,
   };
 }
