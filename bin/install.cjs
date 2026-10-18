@@ -10,7 +10,7 @@ const { uninstall } = require('../lib/installer/uninstall.cjs');
 
 const PAYLOAD_DIR = path.join(__dirname, '..', 'payload');
 const RESTART_LINE =
-  'Restart Claude Code (or start a new session) to load /neat:do, /neat:status and the neat-* agents.';
+  'Restart Claude Code (or start a new session) to load /neat:do, /neat:resume, the neat-* agents and the neat hooks.';
 
 const GLOBAL_AGENT_WARNING =
   '--orchestrator-default with --global makes every Claude Code session in every project ' +
