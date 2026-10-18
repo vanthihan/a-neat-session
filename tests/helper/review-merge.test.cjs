@@ -451,3 +451,19 @@ describe('review merge rounds', () => {
     assert.ok(lines[8].startsWith('file: '));
   });
 });
+
+describe('a fix pass always counts a round', () => {
+  test('after brief --fix the next merge counts a round even when the reviews are byte-identical', () => {
+    const { id, dir, merge } = plannedRun('loop identical');
+    put(dir, 'review.md', 'src/a.js:3 - high - unchecked input reaches the query\n', 30);
+    assert.ok(outLines(merge())[0].endsWith(' round=0/2 next=fix'));
+    for (const expected of ['round=1/2 next=fix', 'round=2/2 next=ask']) {
+      const fixBrief = neat(['brief', id, 'implementer-T1', '--fix']);
+      assert.equal(fixBrief.status, 0, fixBrief.stderr);
+      assert.equal(stateOf(dir).review.inputs, null);
+      const lines = outLines(merge());
+      assert.ok(lines[0].endsWith(` ${expected}`), lines[0]);
+      assert.ok(outLines(merge())[0].endsWith(` ${expected}`), 'a repeated merge does not count again');
+    }
+  });
+});

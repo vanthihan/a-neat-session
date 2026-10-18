@@ -199,7 +199,10 @@ function writeBrief(root, id, worker, notes, now, env = process.env, { fix = fal
   const file = runState.writeRunFile(root, id, `brief-${worker}.md`, text);
   const report = path.join(runDir, `report-${worker}.md`);
   const extra = { model: route.model, effort: route.effort };
-  runState.saveRun(root, runState.setWorker(state, worker, 'running', report, extra), now);
+  // A fix pass clears the review inputs so the next merge always counts the
+  // round, even when the reviewers write byte-identical files again.
+  const base = fix ? { ...state, review: { ...state.review, inputs: null } } : state;
+  runState.saveRun(root, runState.setWorker(base, worker, 'running', report, extra), now);
   return { file, route };
 }
 
