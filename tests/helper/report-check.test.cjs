@@ -116,6 +116,20 @@ test('checkReportFile resolves relative artifacts against the report directory',
   assert.equal(res.ok, true, res.errors.join('\n'));
 });
 
+test('checkReportFile accepts absolute artifacts in a project path with spaces', () => {
+  const spaced = path.join(tmp, 'my project', '.neat', 'runs', RUN_ID);
+  fs.mkdirSync(spaced, { recursive: true });
+  const map = path.join(spaced, 'explore map.md');
+  fs.writeFileSync(map, 'a.js:1 - x\n');
+  const text = report({ artifacts: `- \`${map}\` - the map\n- ${map} - same map\n- ${map}` });
+  const file = path.join(spaced, 'report-explorer.md');
+  fs.writeFileSync(file, text);
+  const res = checkReportFile(file);
+  assert.equal(res.ok, true, res.errors.join('\n'));
+  fs.writeFileSync(file, report({ artifacts: `- \`${path.join(spaced, 'gone file.md')}\`` }));
+  assert.deepEqual(checkReportFile(file).errors, [`artifact not found: ${path.join(spaced, 'gone file.md')}`]);
+});
+
 test('checkReportFile reports a missing artifact', () => {
   const res = checkReportFile(writeReport('report-c.md', report({ artifacts: '- missing.md' })));
   assert.equal(res.ok, false);

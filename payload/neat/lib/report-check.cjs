@@ -88,23 +88,33 @@ function failure(message) {
   return { ok: false, errors: [message], words: 0 };
 }
 
-// Each `- ` item under ## Artifacts is a path (first token, backticks removed)
-// or `none`. Relative paths resolve against the report's directory.
-function artifactPaths(text, reportDir) {
+// Candidate paths for one Artifacts item, most likely first: the whole
+// backticked span when the item starts with one, else the text before ` - `
+// and then its first word. Paths may contain spaces.
+function itemCandidates(item) {
+  const quoted = item.match(/^`([^`]+)`/);
+  if (quoted) return [quoted[1].trim()];
+  const head = item.split(/\s+-\s+/)[0].replace(/`/g, '').trim();
+  return [...new Set([head, head.split(/\s+/)[0]])];
+}
+
+// Each `- ` item under ## Artifacts is a path or `none`, as a list of
+// candidates. Relative paths resolve against the report's directory.
+function artifactItems(text, reportDir) {
   const lines = String(text).split(/\r?\n/);
   const body = sectionLines(lines, headingLines(lines), '## Artifacts') || [];
   return body
     .map((l) => l.trim())
     .filter((l) => l.startsWith('- '))
-    .map((l) => l.slice(2).trim().replace(/`/g, '').split(/\s+/)[0])
-    .filter((item) => item && !/^none\.?$/i.test(item))
-    .map((item) => path.resolve(reportDir, item));
+    .map((l) => itemCandidates(l.slice(2).trim()).filter(Boolean))
+    .filter((c) => c.length > 0 && !/^none\.?$/i.test(c[0]))
+    .map((c) => c.map((item) => path.resolve(reportDir, item)));
 }
 
 function artifactErrors(text, reportDir) {
-  return artifactPaths(text, reportDir)
-    .filter((p) => !fs.existsSync(p))
-    .map((p) => `artifact not found: ${p}`);
+  return artifactItems(text, reportDir)
+    .filter((candidates) => !candidates.some((p) => fs.existsSync(p)))
+    .map((candidates) => `artifact not found: ${candidates[0]}`);
 }
 
 function checkReportFile(file) {
