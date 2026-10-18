@@ -9,6 +9,8 @@ const runState = require(path.join(LIB, 'run-state.cjs'));
 const reportCheck = require(path.join(LIB, 'report-check.cjs'));
 const { parseTaskArgs, UsageError } = require(path.join(LIB, 'cli-args.cjs'));
 const { formatStatus } = require(path.join(LIB, 'status.cjs'));
+const planCheck = require(path.join(LIB, 'plan-check.cjs'));
+const brief = require(path.join(LIB, 'brief.cjs'));
 
 const MAX_ERROR_LINES = 5;
 
@@ -16,6 +18,8 @@ const HELP = [
   'neat run new [--stdin] [--mode gate|auto|step] [task]',
   'neat run stage <run-id> <explore|plan|implement|review|test|docs|done|cancelled>',
   'neat run worker <run-id> <name> <running|done|failed|report-invalid>',
+  'neat plan check <run-id>',
+  'neat brief <run-id> <worker> [--stdin]',
   'neat write <run-id> <file-name> --stdin',
   'neat report check <file>',
   'neat status [--json]',
@@ -104,11 +108,31 @@ function cmdReportCheck(args) {
   return printCheck(reportCheck.checkReportFile(path.resolve(process.cwd(), args[0])));
 }
 
+function cmdPlanCheck(args) {
+  if (args.length !== 1) throw new UsageError('usage: neat plan check <run-id>');
+  const root = runState.projectRoot(process.env, process.cwd());
+  const result = planCheck.checkPlan(root, args[0], runState.currentTime(process.env));
+  result.lines.forEach((line) => out(line));
+  return result.ok ? 0 : 1;
+}
+
+function cmdBrief(args) {
+  const [id, worker, flag] = args;
+  const ok = id && worker && (args.length === 2 || (args.length === 3 && flag === '--stdin'));
+  if (!ok) throw new UsageError('usage: neat brief <run-id> <worker> [--stdin]');
+  const notes = flag === '--stdin' ? readStdin() : '';
+  const root = runState.projectRoot(process.env, process.cwd());
+  out(brief.writeBrief(root, id, worker, notes, runState.currentTime(process.env)));
+  return 0;
+}
+
 function dispatch(argv) {
   const [cmd, sub, ...rest] = argv;
   if (cmd === 'run' && sub === 'new') return cmdRunNew(rest);
   if (cmd === 'run' && sub === 'stage') return cmdRunStage(rest);
   if (cmd === 'run' && sub === 'worker') return cmdRunWorker(rest);
+  if (cmd === 'plan' && sub === 'check') return cmdPlanCheck(rest);
+  if (cmd === 'brief') return cmdBrief(argv.slice(1));
   if (cmd === 'status') return cmdStatus(argv.slice(1));
   if (cmd === 'write') return cmdWrite(argv.slice(1));
   if (cmd === 'report' && sub === 'check') return cmdReportCheck(rest);
