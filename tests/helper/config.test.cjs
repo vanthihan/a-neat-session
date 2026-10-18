@@ -86,7 +86,11 @@ describe('effectiveConfig layering', () => {
       'thresholds.soft': 'default',
       'thresholds.hard': 'default',
       'usage.capturePath': 'default',
+      'codex.enabled': 'default',
+      'codex.model': 'default',
+      'codex.sandboxDefault': 'default',
     });
+    assert.deepEqual(cfg.codex, { enabled: 'auto', model: null, sandboxDefault: 'workspace-write' });
     assert.deepEqual(cfg.files, {
       global: { path: l.globalFile, exists: false },
       project: { path: l.projectFile, exists: false },
@@ -191,6 +195,58 @@ describe('validation', () => {
   });
 });
 
+describe('codex settings', () => {
+  test('global config accepts every codex key with valid values', () => {
+    const l = layout();
+    writeJson(l.globalFile, { codex: { enabled: 'on', model: 'gpt-x.1:mini', sandboxDefault: 'read-only' } });
+    const cfg = l.effective();
+    assert.deepEqual(cfg.codex, { enabled: 'on', model: 'gpt-x.1:mini', sandboxDefault: 'read-only' });
+    assert.equal(cfg.sources['codex.enabled'], 'global');
+    assert.equal(cfg.sources['codex.model'], 'global');
+    assert.equal(config.configValue(cfg, 'codex.model'), 'gpt-x.1:mini');
+    for (const enabled of ['auto', 'off']) {
+      writeJson(l.globalFile, { codex: { enabled } });
+      assert.equal(l.effective().codex.enabled, enabled);
+    }
+  });
+
+  test('invalid codex values and unknown codex keys are config errors', () => {
+    const l = layout();
+    const cases = [
+      [{ codex: { enabled: 'yes' } }, 'codex.enabled must be one of auto|on|off'],
+      [{ codex: { model: 'a b' } }, 'codex.model must match [A-Za-z0-9._:-] (1-64 characters, starting with a letter or digit)'],
+      [{ codex: { model: '-x' } }, 'codex.model must match [A-Za-z0-9._:-] (1-64 characters, starting with a letter or digit)'],
+      [{ codex: { model: 7 } }, 'codex.model must match [A-Za-z0-9._:-] (1-64 characters, starting with a letter or digit)'],
+      [{ codex: { sandboxDefault: 'danger-full-access' } }, 'codex.sandboxDefault must be one of read-only|workspace-write'],
+      [{ codex: { approval: 'never' } }, "unknown key 'codex.approval'"],
+      [{ codex: 'on' }, 'codex must be a JSON object'],
+    ];
+    for (const [value, reason] of cases) {
+      writeJson(l.globalFile, value);
+      configError(() => l.effective(), `invalid config ${l.globalFile}: ${reason}`);
+    }
+  });
+
+  test('the project config may only switch codex off', () => {
+    const l = layout();
+    writeJson(l.globalFile, { codex: { enabled: 'auto' } });
+    writeJson(l.projectFile, { codex: { enabled: 'off' } });
+    const cfg = l.effective();
+    assert.equal(cfg.codex.enabled, 'off');
+    assert.equal(cfg.sources['codex.enabled'], 'project');
+    for (const enabled of ['auto', 'on']) {
+      writeJson(l.projectFile, { codex: { enabled } });
+      configError(() => l.effective(),
+        `invalid config ${l.projectFile}: codex.enabled may only be off in the project config`);
+    }
+    writeJson(l.projectFile, { codex: { model: 'gpt-x' } });
+    configError(() => l.effective(), `invalid config ${l.projectFile}: codex.model is only allowed in the global config`);
+    writeJson(l.projectFile, { codex: { sandboxDefault: 'read-only' } });
+    configError(() => l.effective(),
+      `invalid config ${l.projectFile}: codex.sandboxDefault is only allowed in the global config`);
+  });
+});
+
 describe('configLines and configValue', () => {
   test('show lines carry value and source plus both file paths', () => {
     const l = layout();
@@ -201,6 +257,9 @@ describe('configLines and configValue', () => {
       'thresholds.soft=70 (default)',
       'thresholds.hard=90 (default)',
       `usage.capturePath=${path.join(l.env.CLAUDE_CONFIG_DIR, 'neat', 'usage.json')} (default)`,
+      'codex.enabled=auto (default)',
+      'codex.model=(unset) (default)',
+      'codex.sandboxDefault=workspace-write (default)',
       `global=${l.globalFile} (found)`,
       `project=${l.projectFile} (missing)`,
     ]);
@@ -214,7 +273,7 @@ describe('configLines and configValue', () => {
     assert.ok(path.isAbsolute(config.configValue(cfg, 'usage.capturePath')));
     configError(
       () => config.configValue(cfg, 'nope'),
-      "unknown config key 'nope' (use profile|thresholds.soft|thresholds.hard|usage.capturePath)",
+      "unknown config key 'nope' (use profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault)",
     );
   });
 });
@@ -248,6 +307,9 @@ describe('CLI', () => {
       'thresholds.soft=70 (default)',
       'thresholds.hard=90 (default)',
       `usage.capturePath=${path.join(cfgDir, 'neat', 'usage.json')} (default)`,
+      'codex.enabled=auto (default)',
+      'codex.model=(unset) (default)',
+      'codex.sandboxDefault=workspace-write (default)',
       `global=${path.join(cfgDir, 'neat', 'config.json')} (missing)`,
       `project=${path.join(proj, '.neat', 'config.json')} (missing)`,
     ]);
@@ -257,6 +319,9 @@ describe('CLI', () => {
     const res = neat(['config', 'get', 'thresholds.soft']);
     assert.equal(res.status, 0, res.stderr);
     assert.equal(res.stdout, '70\n');
+    assert.equal(neat(['config', 'get', 'codex.enabled']).stdout, 'auto\n');
+    assert.equal(neat(['config', 'get', 'codex.model']).stdout, '(unset)\n');
+    assert.equal(neat(['config', 'get', 'codex.sandboxDefault']).stdout, 'workspace-write\n');
     const bad = neat(['config', 'get', 'nope']);
     assert.equal(bad.status, 2);
     assert.match(bad.stderr, /unknown config key 'nope'/);

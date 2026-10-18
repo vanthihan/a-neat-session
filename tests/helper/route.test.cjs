@@ -7,7 +7,9 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { REPO_ROOT, childEnv, runNode, makeTempDir, removeDir } = require('../support/helpers.cjs');
+const {
+  REPO_ROOT, childEnv, runNode, makeTempDir, removeDir, installFakeCodex,
+} = require('../support/helpers.cjs');
 
 const LIB = path.join(REPO_ROOT, 'payload', 'neat', 'lib');
 const route = require(path.join(LIB, 'route.cjs'));
@@ -292,5 +294,83 @@ describe('routeWorker usage step-down', () => {
     assert.match(line('reviewer'), / usage=88% stepdown=yes /);
     setGlobal(null);
     assert.match(line('reviewer'), / usage=10% stepdown=no /);
+  });
+});
+
+describe('routeWorker engine at the hard threshold', () => {
+  const NOW = new Date('2026-05-01T12:00:00Z');
+  const FUTURE = Math.floor(NOW.getTime() / 1000) + 3600;
+  const WRITE_WORKERS = ['implementer-T1', 'tester', 'docs-D1'];
+  const ELIGIBLE = [...WRITE_WORKERS, 'reviewer'];
+  let root;
+  let cfgDir;
+  let binDir;
+  let shim;
+
+  before(() => {
+    root = makeTempDir('neat-route-hard-root-');
+    cfgDir = makeTempDir('neat-route-hard-cfg-');
+    binDir = makeTempDir('neat-route-hard-bin-');
+    shim = installFakeCodex(binDir);
+    fs.mkdirSync(path.join(cfgDir, 'neat'));
+  });
+
+  after(() => {
+    removeDir(root);
+    removeDir(cfgDir);
+    removeDir(binDir);
+  });
+
+  function setUsage(fiveHour) {
+    const data = { rate_limits: { five_hour: { used_percentage: fiveHour, resets_at: FUTURE } } };
+    fs.writeFileSync(path.join(cfgDir, 'neat', 'usage.json'), JSON.stringify(data));
+  }
+
+  function setGlobal(obj) {
+    const file = path.join(cfgDir, 'neat', 'config.json');
+    if (obj === null) fs.rmSync(file, { force: true });
+    else fs.writeFileSync(file, JSON.stringify(obj));
+  }
+
+  function tail(worker, bin = shim) {
+    const env = { CLAUDE_CONFIG_DIR: cfgDir, NEAT_CODEX_BIN: bin };
+    const line = route.formatRoute(route.routeWorker(root, { profile: null }, worker, env, NOW, cfgDir));
+    return line.split(' ').slice(-2).join(' ');
+  }
+
+  test('with codex available, eligible workers go to codex and explorer/researcher pause', () => {
+    setGlobal(null);
+    setUsage(95);
+    for (const w of ELIGIBLE) assert.equal(tail(w), 'target=codex action=run', w);
+    for (const w of ['explorer', 'researcher']) assert.equal(tail(w), 'target=claude action=pause', w);
+  });
+
+  test('without codex (none, missing file or enabled off) every worker pauses', () => {
+    setUsage(95);
+    setGlobal(null);
+    for (const w of [...ELIGIBLE, 'explorer']) {
+      assert.equal(tail(w, 'none'), 'target=claude action=pause', w);
+      assert.equal(tail(w, path.join(binDir, 'missing')), 'target=claude action=pause', w);
+    }
+    setGlobal({ codex: { enabled: 'off' } });
+    for (const w of ELIGIBLE) assert.equal(tail(w), 'target=claude action=pause', w);
+    setGlobal(null);
+  });
+
+  test('sandboxDefault read-only keeps write roles off codex; the reviewer still goes', () => {
+    setUsage(95);
+    setGlobal({ codex: { sandboxDefault: 'read-only' } });
+    for (const w of WRITE_WORKERS) assert.equal(tail(w), 'target=claude action=pause', w);
+    assert.equal(tail('reviewer'), 'target=codex action=run');
+    setGlobal(null);
+  });
+
+  test('below hard every worker runs on claude whatever codex is', () => {
+    setGlobal(null);
+    setUsage(89);
+    for (const w of [...ELIGIBLE, 'explorer', 'researcher']) {
+      assert.equal(tail(w), 'target=claude action=run', w);
+      assert.equal(tail(w, 'none'), 'target=claude action=run', w);
+    }
   });
 });
