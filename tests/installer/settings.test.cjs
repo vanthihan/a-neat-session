@@ -227,6 +227,61 @@ describe('installer settings integration', () => {
     assert.deepEqual(m.settings.createdKeys, [['permissions'], ['permissions', 'allow'], ['hooks'], ['hooks', 'SessionStart']]);
   });
 
+  // Rewrite settings and manifest as an older install would have left them:
+  // its SessionStart entry had timeout 5 instead of the current one.
+  function downgradeSessionStart(settingsPath, manifestPath, { keepInSettings = true } = {}) {
+    const current = sessionStartFor(cfg);
+    const older = { ...current, hooks: [{ ...current.hooks[0], timeout: 5 }] };
+    const s = readJson(settingsPath);
+    s.hooks.SessionStart = keepInSettings ? [older] : [];
+    s.hooks.SessionStart = s.hooks.SessionStart.concat(USER_SESSION_START);
+    fs.writeFileSync(settingsPath, JSON.stringify(s, null, 2));
+    const m = readJson(manifestPath);
+    m.settings.added = m.settings.added.map((a) => (a.path[1] === 'SessionStart' ? { ...a, value: older } : a));
+    fs.writeFileSync(manifestPath, JSON.stringify(m, null, 2));
+  }
+  const USER_SESSION_START = [{ matcher: 'startup', hooks: [{ type: 'command', command: 'echo mine' }] }];
+
+  test('reinstall replaces entries an older install recorded and no longer adds', () => {
+    fs.mkdirSync(cfg);
+    const settings = path.join(cfg, 'settings.json');
+    const manifestPath = path.join(cfg, 'neat', 'manifest.json');
+    fs.writeFileSync(settings, JSON.stringify(USER_SETTINGS));
+    assert.equal(runGlobal([]).status, 0);
+    downgradeSessionStart(settings, manifestPath);
+
+    const res = runGlobal([]);
+    assert.equal(res.status, 0, res.stderr);
+    const merged = readJson(settings);
+    assert.deepEqual(merged.hooks.SessionStart, [...USER_SESSION_START, sessionStartFor(cfg)]);
+    assert.deepEqual(merged.hooks.Stop, USER_SETTINGS.hooks.Stop);
+    assert.deepEqual(merged.permissions.allow, ['Bash(ls *)', ruleFor(cfg)]);
+    assert.deepEqual(readJson(manifestPath).settings.added, [
+      { path: ALLOW, value: ruleFor(cfg) },
+      { path: ['hooks', 'SessionStart'], value: sessionStartFor(cfg) },
+    ]);
+
+    const afterReconcile = fs.readFileSync(settings, 'utf8');
+    assert.equal(runGlobal([]).status, 0);
+    assert.equal(fs.readFileSync(settings, 'utf8'), afterReconcile, 'second reinstall rewrites nothing');
+
+    assert.equal(runGlobal(['--uninstall']).status, 0);
+    const restored = readJson(settings);
+    assert.deepEqual(restored.hooks.SessionStart, USER_SESSION_START);
+    assert.deepEqual(restored.permissions, USER_SETTINGS.permissions);
+  });
+
+  test('reinstall tolerates an old recorded entry the user already deleted', () => {
+    const settings = path.join(cfg, 'settings.json');
+    const manifestPath = path.join(cfg, 'neat', 'manifest.json');
+    assert.equal(runGlobal([]).status, 0);
+    downgradeSessionStart(settings, manifestPath, { keepInSettings: false });
+    const res = runGlobal([]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.deepEqual(readJson(settings).hooks.SessionStart, [...USER_SESSION_START, sessionStartFor(cfg)]);
+    assert.deepEqual(readJson(manifestPath).settings.added.map((a) => a.value), [ruleFor(cfg), sessionStartFor(cfg)]);
+  });
+
   test('uninstall with unparseable settings warns and still removes files', () => {
     assert.equal(runGlobal([]).status, 0);
     fs.writeFileSync(path.join(cfg, 'settings.json'), '{ broken');
