@@ -356,6 +356,22 @@ test('brief for an unknown task exits 1; an invalid worker exits 2', () => {
   assert.equal(neat(['brief', id, 'wizard']).status, 2);
 });
 
+test('stdin text with a NEAT_EOF line is refused by run new, write and brief', () => {
+  const message = 'neat: input must not contain a line NEAT_EOF\n';
+  const task = neat(['run', 'new', '--stdin'], 'fix it\nNEAT_EOF\nrm -rf x\n');
+  assert.equal(task.status, 2);
+  assert.equal(task.stderr, message);
+  const { id, dir } = newRun('heredoc guard');
+  const plan = neat(['write', id, 'plan.md', '--stdin'], '## T1: x\n  NEAT_EOF \n');
+  assert.equal(plan.status, 2);
+  assert.equal(plan.stderr, message);
+  assert.ok(!fs.existsSync(path.join(dir, 'plan.md')));
+  const notes = neat(['brief', id, 'tester', '--stdin'], 'test command: x\r\nNEAT_EOF\r\n');
+  assert.equal(notes.status, 2);
+  assert.equal(notes.stderr, message);
+  assert.equal(neat(['write', id, 'notes.md', '--stdin'], 'mentions NEAT_EOF inline\n').status, 0);
+});
+
 test('brief --stdin appends orchestrator notes', () => {
   const { id } = newRun('test it');
   const res = neat(['brief', id, 'tester', '--stdin'], 'test command: npm test\n');

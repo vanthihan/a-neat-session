@@ -34,8 +34,16 @@ function out(text) {
   process.stdout.write(`${text}\n`);
 }
 
+// Delimiter of the quoted heredocs in the shipped prompts. A text line equal to
+// it would end the heredoc early, so input that contains one is refused.
+const HEREDOC_END = 'NEAT_EOF';
+
 function readStdin() {
-  return fs.readFileSync(0, 'utf8');
+  const text = fs.readFileSync(0, 'utf8');
+  if (text.split(/\r?\n/).some((line) => line.trim() === HEREDOC_END)) {
+    throw new UsageError(`input must not contain a line ${HEREDOC_END}`);
+  }
+  return text;
 }
 
 function cmdRunNew(args) {
