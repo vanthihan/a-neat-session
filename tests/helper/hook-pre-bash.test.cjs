@@ -61,6 +61,15 @@ describe('recognize', () => {
     for (const c of [undefined, null, 42, {}]) assert.equal(recognize(c), null);
   });
 
+  test('a line break or control character anywhere, even after a leading cd, is never recognized', () => {
+    for (const c of [
+      'cd app && npm test\n', 'cd app && npm test\r', 'cd app && npm test\r\n', '\ncd app && npm test',
+      'npm test\n', 'npm test\r', 'cd app\n&& npm test', 'cd app && npm\u000btest', 'npm test\u0000',
+    ]) {
+      assert.equal(recognize(c), null, JSON.stringify(c));
+    }
+  });
+
   test('balanced quotes are fine', () => {
     assert.equal(recognize('pytest -k "login and not slow"'), 'test');
     assert.equal(recognize("npm test -- --grep 'adds two'"), 'test');
@@ -120,6 +129,16 @@ describe('preBash', () => {
     assert.equal(path.dirname(m[3]), logs);
     assert.match(path.basename(m[3]), /^test-20261018-120000-[0-9a-f]{4}\.txt$/);
     assert.ok(!out.includes('permission'), out);
+  });
+
+  test('the rewrite uses the trimmed command that was checked', () => {
+    newRun();
+    for (const c of ['  cd app && npm test  ', '\tnpm test ']) {
+      const cmd = JSON.parse(call(bash(c))).hookSpecificOutput.updatedInput.command;
+      assert.ok(cmd.startsWith(`set -o pipefail; ${c.trim()} 2>&1 | node `), JSON.stringify(cmd));
+    }
+    assert.equal(call(bash('cd app && npm test\n')), '');
+    assert.equal(call(bash('cd app && npm test\r')), '');
   });
 
   test('the newest active run gets the log', () => {

@@ -19,6 +19,10 @@ const SHELL_SAFE = /^[A-Za-z0-9._/+@-]+$/;
 // Shell syntax the recognizer never accepts (operators, redirects,
 // substitutions, grouping, comments, escapes, line breaks).
 const FORBIDDEN = /[\n\r|&;<>`(){}#\\]/;
+// Line breaks and other control characters (tab aside) anywhere in the
+// command: a trailing newline after `cd x && ...` would otherwise end the
+// original command before the pipe and hide its exit code.
+const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f]/;
 const LEADING_CD = /^cd ([A-Za-z0-9._/+@-]+) && (.+)$/s;
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=[^\s$'"]*$/;
 const WATCH_WORDS = new Set(['--watch', '--watchAll', '-w', 'watch', 'dev', 'serve', '--serve', 'start']);
@@ -125,8 +129,10 @@ function classify(words) {
 // 'test' | 'build' | 'install' for a plain known noisy command, else null.
 function recognize(command) {
   if (typeof command !== 'string' || command.length > MAX_COMMAND) return null;
-  const cd = LEADING_CD.exec(command.trim());
-  const rest = cd ? cd[2] : command;
+  if (CONTROL.test(command)) return null;
+  const trimmed = command.trim();
+  const cd = LEADING_CD.exec(trimmed);
+  const rest = cd ? cd[2] : trimmed;
   if (FORBIDDEN.test(rest) || rest.includes('$(') || !quotesBalanced(rest)) return null;
   const words = rest.trim().split(/\s+/).filter(Boolean);
   while (words.length > 0 && ASSIGNMENT.test(words[0])) words.shift();
@@ -166,7 +172,8 @@ function rewriteFor(input, env, { root, helper }) {
   if (!run) return '';
   const logPath = logPathFor(root, run.id, kind, now);
   if (!SHELL_SAFE.test(logPath)) return '';
-  const command = rewrite(toolInput.command, { helper, runId: run.id, kind, logPath });
+  // The exact text recognize() checked, so nothing unchecked reaches the shell.
+  const command = rewrite(toolInput.command.trim(), { helper, runId: run.id, kind, logPath });
   return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput: { ...toolInput, command } } });
 }
 
