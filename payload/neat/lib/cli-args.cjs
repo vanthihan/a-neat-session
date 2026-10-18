@@ -1,8 +1,8 @@
 'use strict';
 
 // Parses the raw /neat:do argument text into { task, mode }.
-// Flags are recognised only as leading or trailing tokens; everything in
-// between is task text, kept byte-exact (inner whitespace included).
+// Flags are recognised only as leading tokens or a trailing `--mode` pair;
+// everything else is task text, kept byte-exact (inner whitespace included).
 
 const MODES = Object.freeze(['gate', 'auto', 'step']);
 const DEFAULT_MODE = 'gate';
@@ -26,7 +26,7 @@ function tokenize(text) {
 }
 
 function unknownFlag(token) {
-  return new UsageError(`unknown flag ${token.split('=')[0]} (valid: --mode)`);
+  return new UsageError(`unknown flag ${token.split('=')[0]} (valid: --mode; put -- before a task that starts with a flag)`);
 }
 
 function checkMode(value) {
@@ -66,7 +66,9 @@ function consumeLeading(tokens, mode) {
   return { index: i, stop: false };
 }
 
-// Consumes trailing flags down to (not below) `floor`; returns the new end index.
+// Consumes trailing `--mode <gate|auto|step>` and `--mode=<value>` down to (not
+// below) `floor`; returns the new end index. Any other trailing token, even one
+// that looks like a flag (`add a --dry-run option`), is task text.
 function consumeTrailing(tokens, floor, mode) {
   let j = tokens.length;
   while (j > floor) {
@@ -75,15 +77,9 @@ function consumeTrailing(tokens, floor, mode) {
     if (last.startsWith('--mode=')) {
       mode.set(last.slice('--mode='.length));
       j -= 1;
-    } else if (prev === '--mode') {
+    } else if (prev === '--mode' && MODES.includes(last)) {
       mode.set(last);
       j -= 2;
-    } else if (last === '--mode') {
-      checkMode(undefined);
-    } else if (last.startsWith('--')) {
-      throw unknownFlag(last);
-    } else if (prev && prev.startsWith('--') && !prev.includes('=')) {
-      throw unknownFlag(prev);
     } else {
       break;
     }

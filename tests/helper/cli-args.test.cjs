@@ -51,19 +51,28 @@ test('inner whitespace and newlines of the task are preserved', () => {
   assert.equal(parseTaskArgs('--mode step line one\n  line two\n').task, 'line one\n  line two');
 });
 
-test('unknown flags are usage errors', () => {
-  usage('fix it --mod auto', 'unknown flag --mod (valid: --mode)');
-  usage('--verbose fix it', 'unknown flag --verbose (valid: --mode)');
-  usage('fix it --verbose', 'unknown flag --verbose (valid: --mode)');
+test('unknown leading flags are usage errors that point to --', () => {
+  usage('--verbose fix it', 'unknown flag --verbose (valid: --mode; put -- before a task that starts with a flag)');
 });
 
-test('invalid mode value is a usage error', () => {
-  usage('fix it --mode fast', "invalid --mode 'fast' (use gate|auto|step)");
+test('trailing words that mention a flag are task text', () => {
+  for (const text of [
+    'add a --dry-run option', 'support --json', 'fix the --mode flag', 'make --mode work',
+    'fix it --mod auto', 'fix it --verbose', 'fix it --mode fast', 'document --mode',
+  ]) {
+    assert.deepEqual(parseTaskArgs(text), { task: text, mode: 'gate' });
+  }
+  assert.deepEqual(parseTaskArgs('support --json --mode auto'), { task: 'support --json', mode: 'auto' });
+});
+
+test('invalid --mode= value is a usage error', () => {
+  usage('fix it --mode=fast', "invalid --mode 'fast' (use gate|auto|step)");
   usage('--mode=fast fix it', "invalid --mode 'fast' (use gate|auto|step)");
+  usage('--mode fast fix it', "invalid --mode 'fast' (use gate|auto|step)");
 });
 
-test('--mode without a value is a usage error', () => {
-  usage('fix it --mode', '--mode needs a value (use gate|auto|step)');
+test('leading --mode without a value is a usage error', () => {
+  usage('--mode', '--mode needs a value (use gate|auto|step)');
 });
 
 test('duplicate --mode is a usage error', () => {
@@ -81,7 +90,7 @@ test('helper maps parse errors to exit 2 with a one-line message', () => {
   try {
     const res = runNode([HELPER, 'run', 'new', '--stdin'], {
       env: childEnv({ NEAT_PROJECT_DIR: proj }),
-      input: 'x --mode fast\n',
+      input: 'x --mode=fast\n',
     });
     assert.equal(res.status, 2);
     assert.equal(res.stderr, "neat: invalid --mode 'fast' (use gate|auto|step)\n");
