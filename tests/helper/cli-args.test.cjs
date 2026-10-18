@@ -19,12 +19,12 @@ function usage(text, message) {
 }
 
 test('trailing --mode X is parsed', () => {
-  assert.deepEqual(parseTaskArgs('add login --mode auto'), { task: 'add login', mode: 'auto', profile: null, research: false });
+  assert.deepEqual(parseTaskArgs('add login --mode auto'), { task: 'add login', mode: 'auto', profile: null, research: false, tmux: false });
 });
 
 test('leading --mode=X is parsed and one layer of wrapping quotes is stripped', () => {
-  assert.deepEqual(parseTaskArgs('--mode=step "add X"'), { task: 'add X', mode: 'step', profile: null, research: false });
-  assert.deepEqual(parseTaskArgs("'add Y'"), { task: 'add Y', mode: 'gate', profile: null, research: false });
+  assert.deepEqual(parseTaskArgs('--mode=step "add X"'), { task: 'add X', mode: 'step', profile: null, research: false, tmux: false });
+  assert.deepEqual(parseTaskArgs("'add Y'"), { task: 'add Y', mode: 'gate', profile: null, research: false, tmux: false });
 });
 
 test('quotes that do not wrap the whole task are kept', () => {
@@ -37,11 +37,12 @@ test('--mode in the middle of the task is task text, mode defaults to gate', () 
     mode: 'gate',
     profile: null,
     research: false,
+    tmux: false,
   });
 });
 
 test('-- ends flag parsing', () => {
-  assert.deepEqual(parseTaskArgs('--mode auto -- --weird task'), { task: '--weird task', mode: 'auto', profile: null, research: false });
+  assert.deepEqual(parseTaskArgs('--mode auto -- --weird task'), { task: '--weird task', mode: 'auto', profile: null, research: false, tmux: false });
 });
 
 test('shell metacharacters survive byte-exact', () => {
@@ -55,7 +56,7 @@ test('inner whitespace and newlines of the task are preserved', () => {
 });
 
 test('unknown leading flags are usage errors that point to --', () => {
-  usage('--verbose fix it', 'unknown flag --verbose (valid: --mode, --profile, --research; put -- before a task that starts with a flag)');
+  usage('--verbose fix it', 'unknown flag --verbose (valid: --mode, --profile, --research, --tmux; put -- before a task that starts with a flag)');
 });
 
 test('trailing words that mention a flag are task text', () => {
@@ -63,9 +64,9 @@ test('trailing words that mention a flag are task text', () => {
     'add a --dry-run option', 'support --json', 'fix the --mode flag', 'make --mode work',
     'fix it --mod auto', 'fix it --verbose', 'fix it --mode fast', 'document --mode',
   ]) {
-    assert.deepEqual(parseTaskArgs(text), { task: text, mode: 'gate', profile: null, research: false });
+    assert.deepEqual(parseTaskArgs(text), { task: text, mode: 'gate', profile: null, research: false, tmux: false });
   }
-  assert.deepEqual(parseTaskArgs('support --json --mode auto'), { task: 'support --json', mode: 'auto', profile: null, research: false });
+  assert.deepEqual(parseTaskArgs('support --json --mode auto'), { task: 'support --json', mode: 'auto', profile: null, research: false, tmux: false });
 });
 
 test('invalid --mode= value is a usage error', () => {
@@ -83,18 +84,18 @@ test('duplicate --mode is a usage error', () => {
 });
 
 test('leading and trailing --profile set the profile; no flag leaves it null', () => {
-  assert.deepEqual(parseTaskArgs('--profile budget fix it'), { task: 'fix it', mode: 'gate', profile: 'budget', research: false });
-  assert.deepEqual(parseTaskArgs('fix it --profile quality'), { task: 'fix it', mode: 'gate', profile: 'quality', research: false });
-  assert.deepEqual(parseTaskArgs('--profile=inherit fix'), { task: 'fix', mode: 'gate', profile: 'inherit', research: false });
-  assert.deepEqual(parseTaskArgs('fix it'), { task: 'fix it', mode: 'gate', profile: null, research: false });
-  assert.deepEqual(parseTaskArgs('--mode auto --profile balanced x'), { task: 'x', mode: 'auto', profile: 'balanced', research: false });
-  assert.deepEqual(parseTaskArgs('fix it --profile adaptive --mode step'), { task: 'fix it', mode: 'step', profile: 'adaptive', research: false });
-  assert.deepEqual(parseTaskArgs('fix it --profile=budget'), { task: 'fix it', mode: 'gate', profile: 'budget', research: false });
+  assert.deepEqual(parseTaskArgs('--profile budget fix it'), { task: 'fix it', mode: 'gate', profile: 'budget', research: false, tmux: false });
+  assert.deepEqual(parseTaskArgs('fix it --profile quality'), { task: 'fix it', mode: 'gate', profile: 'quality', research: false, tmux: false });
+  assert.deepEqual(parseTaskArgs('--profile=inherit fix'), { task: 'fix', mode: 'gate', profile: 'inherit', research: false, tmux: false });
+  assert.deepEqual(parseTaskArgs('fix it'), { task: 'fix it', mode: 'gate', profile: null, research: false, tmux: false });
+  assert.deepEqual(parseTaskArgs('--mode auto --profile balanced x'), { task: 'x', mode: 'auto', profile: 'balanced', research: false, tmux: false });
+  assert.deepEqual(parseTaskArgs('fix it --profile adaptive --mode step'), { task: 'fix it', mode: 'step', profile: 'adaptive', research: false, tmux: false });
+  assert.deepEqual(parseTaskArgs('fix it --profile=budget'), { task: 'fix it', mode: 'gate', profile: 'budget', research: false, tmux: false });
 });
 
 test('--profile mentioned in the task or with an invalid trailing value is task text', () => {
   for (const text of ['add a --profile option', 'fix it --profile wizard', 'fix it --profile=fast', 'document --profile']) {
-    assert.deepEqual(parseTaskArgs(text), { task: text, mode: 'gate', profile: null, research: false });
+    assert.deepEqual(parseTaskArgs(text), { task: text, mode: 'gate', profile: null, research: false, tmux: false });
   }
 });
 
@@ -107,22 +108,22 @@ test('invalid, missing and duplicate leading --profile are usage errors', () => 
 
 test('leading --research sets research; without it research is false', () => {
   assert.deepEqual(parseTaskArgs('--research how does retry work'), {
-    task: 'how does retry work', mode: 'gate', profile: null, research: true,
+    task: 'how does retry work', mode: 'gate', profile: null, research: true, tmux: false,
   });
   assert.equal(parseTaskArgs('how does retry work').research, false);
   assert.deepEqual(parseTaskArgs('--mode auto --research --profile budget x'), {
-    task: 'x', mode: 'auto', profile: 'budget', research: true,
+    task: 'x', mode: 'auto', profile: 'budget', research: true, tmux: false,
   });
 });
 
 test('duplicate --research and --research=value are usage errors', () => {
   usage('--research --research x', 'duplicate --research');
-  usage('--research=yes x', 'unknown flag --research (valid: --mode, --profile, --research; put -- before a task that starts with a flag)');
+  usage('--research=yes x', 'unknown flag --research (valid: --mode, --profile, --research, --tmux; put -- before a task that starts with a flag)');
 });
 
 test('a trailing --research is task text', () => {
   assert.deepEqual(parseTaskArgs('explain x --research'), {
-    task: 'explain x --research', mode: 'gate', profile: null, research: false,
+    task: 'explain x --research', mode: 'gate', profile: null, research: false, tmux: false,
   });
 });
 
@@ -146,6 +147,43 @@ test('run new --stdin stores research in state.json', () => {
   } finally {
     removeDir(proj);
   }
+});
+
+test('leading --tmux sets tmux; a trailing one is task text; a duplicate is an error', () => {
+  assert.deepEqual(parseTaskArgs('--tmux fix bug'), { task: 'fix bug', mode: 'gate', profile: null, research: false, tmux: true });
+  assert.deepEqual(parseTaskArgs('--research --tmux --mode auto fix'), {
+    task: 'fix', mode: 'auto', profile: null, research: true, tmux: true,
+  });
+  assert.deepEqual(parseTaskArgs('fix bug --tmux'), { task: 'fix bug --tmux', mode: 'gate', profile: null, research: false, tmux: false });
+  usage('--tmux --tmux x', 'duplicate --tmux');
+  usage('--tmux=yes x', 'unknown flag --tmux (valid: --mode, --profile, --research, --tmux; put -- before a task that starts with a flag)');
+});
+
+test('run new --stdin stores tmux in state.json', () => {
+  const proj = makeTempDir('neat-cli-');
+  try {
+    const env = childEnv({ NEAT_PROJECT_DIR: proj, NEAT_NOW: '2026-10-18T01:02:03Z' });
+    const stateOf = (input) => {
+      const res = runNode([HELPER, 'run', 'new', '--stdin'], { env, input });
+      assert.equal(res.status, 0, res.stderr);
+      return JSON.parse(fs.readFileSync(path.join(res.stdout.match(/ dir=(\S+)/)[1], 'state.json'), 'utf8'));
+    };
+    const on = stateOf('--tmux watch it\n');
+    assert.deepEqual([on.tmux, on.task], [true, 'watch it']);
+    assert.equal(stateOf('plain task\n').tmux, false);
+  } finally {
+    removeDir(proj);
+  }
+});
+
+test('help and the do command hint show --tmux', () => {
+  const res = runNode([HELPER, 'help'], { env: childEnv({}) });
+  assert.equal(res.status, 0);
+  const lines = res.stdout.split('\n');
+  assert.ok(lines.find((l) => l.startsWith('neat run new')).includes('[--tmux]'));
+  assert.ok(lines.find((l) => l.startsWith('neat codex run')).includes('[--tmux]'));
+  const doMd = fs.readFileSync(path.join(REPO_ROOT, 'payload', 'commands', 'neat', 'do.md'), 'utf8');
+  assert.ok(doMd.split('\n').find((l) => l.startsWith('argument-hint:')).includes('[--tmux]'));
 });
 
 test('help shows --research on run new', () => {
