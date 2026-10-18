@@ -20,7 +20,7 @@ const CODEX_GUIDE_MENTIONS = [
 ];
 const REVIEW_GUIDE_MENTIONS = [
   'run diff', 'reviewer-2', 'neat-reviewer', 'guide codex', 'review merge', '--fix', 'next=fix', 'next=ask',
-  'next=stop', 'AskUserQuestion', 'untrusted', 'run commit',
+  'next=stop', 'next=failed', 'unowned=', 'unparsed=', 'AskUserQuestion', 'untrusted', 'run commit',
 ];
 const MAX_DESCRIPTION = 200;
 const MAX_BODY_WORDS = 1500;

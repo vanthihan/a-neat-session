@@ -284,7 +284,7 @@ describe('neat review merge', () => {
     assert.equal(res.status, 0, res.stderr);
     const lines = res.stdout.trimEnd().split('\n');
     assert.ok(lines.length <= 12);
-    assert.equal(lines[0], 'merged critical=2 warning=0 info=6 both=1 disputed=1 round=0/2 next=done');
+    assert.equal(lines[0], 'merged critical=2 warning=0 info=6 both=1 disputed=1 round=0/2 next=ask');
     assert.equal(lines[1], 'unowned=src/db.js,src/z.js');
     assert.equal(lines[2], 'src/db.js:40 critical [both] unchecked input reaches the SQL query');
     assert.equal(lines[3], 'src/z.js:1 critical [codex] secret in code (disputed)');
@@ -315,11 +315,11 @@ describe('neat review merge', () => {
     assert.equal(res.stdout.split('\n')[1], 'unparsed=1');
   });
 
-  test('no source files gives zero counts and none', () => {
+  test('no source files gives zero counts, none and next=failed (nothing was reviewed)', () => {
     const { id, dir } = newRun('empty merge');
     const res = neat(['review', 'merge', id]);
     assert.equal(res.status, 0, res.stderr);
-    assert.equal(res.stdout, `merged critical=0 warning=0 info=0 both=0 disputed=0 round=0/2 next=done\nnone\nfile: ${path.join(dir, 'review-merged.md')}\n`);
+    assert.equal(res.stdout, `merged critical=0 warning=0 info=0 both=0 disputed=0 round=0/2 next=failed\nnone\nfile: ${path.join(dir, 'review-merged.md')}\n`);
     assert.equal(fs.readFileSync(path.join(dir, 'review-merged.md'), 'utf8'), 'none\n');
   });
 
@@ -369,6 +369,15 @@ describe('fixFindings, reviewNext and setReview', () => {
     assert.equal(next(['T1'], 2, 2, 'auto'), 'stop');
     assert.equal(next(['T1'], 0, 0, 'gate'), 'ask');
     assert.equal(next(['T1'], 0, 0, 'auto'), 'stop');
+  });
+
+  test('reviewNext: a critical no task owns asks or stops instead of done; no finished reviewer is failed', () => {
+    assert.equal(rm.reviewNext({ fixTasks: [], fixRounds: 0, maxRounds: 2, mode: 'gate', unownedCritical: 1 }), 'ask');
+    assert.equal(rm.reviewNext({ fixTasks: [], fixRounds: 0, maxRounds: 2, mode: 'auto', unownedCritical: 1 }), 'stop');
+    assert.equal(rm.reviewNext({ fixTasks: ['T1'], fixRounds: 0, maxRounds: 2, mode: 'auto', unownedCritical: 1 }), 'fix');
+    assert.equal(rm.reviewNext({ fixTasks: ['T1'], fixRounds: 0, maxRounds: 2, mode: 'gate', reviewed: false }), 'failed');
+    const tasks = [{ id: 'T1', owns: ['src/a.js'] }];
+    assert.equal(rm.unownedCriticals([m('src/a.js', 1, 'critical'), m('src/z.js', 1, 'critical'), m('src/y.js', 1, 'warning')], tasks), 1);
   });
 
   test('setReview returns a new state and leaves the input untouched', () => {
@@ -422,7 +431,7 @@ describe('review merge rounds', () => {
     assert.match(review.inputs, /^[0-9a-f]{64}$/);
     assert.deepEqual({ ...review, inputs: 'x' }, {
       reviews: 1, fixRounds: 0, maxRounds: 2, critical: 1, warning: 0, info: 0,
-      fixTasks: ['T1'], unowned: [], inputs: 'x',
+      fixTasks: ['T1'], unowned: [], unownedCritical: 0, inputs: 'x',
     });
     const again = merge();
     assert.equal(again.stdout, merge().stdout);
@@ -465,6 +474,32 @@ describe('review merge rounds', () => {
     assert.equal(lines[1], 'unowned=src/z.js');
     assert.deepEqual(stateOf(other.dir).review.unowned, ['src/z.js']);
     assert.deepEqual(stateOf(other.dir).review.fixTasks, []);
+  });
+
+  test('a critical on a file no task owns asks; a warning there is still done', () => {
+    const crit = plannedRun('loop unowned critical');
+    put(crit.dir, 'review.md', 'src/z.js:1 - high - secret in code\n', 10);
+    let lines = outLines(crit.merge());
+    assert.ok(lines[0].endsWith(' round=0/2 next=ask'), lines[0]);
+    assert.equal(lines[1], 'unowned=src/z.js');
+    const auto = plannedRun('--mode auto loop unowned critical');
+    put(auto.dir, 'review.md', 'src/z.js:1 - high - secret in code\n', 10);
+    lines = outLines(auto.merge());
+    assert.ok(lines[0].endsWith(' round=0/2 next=stop'), lines[0]);
+  });
+
+  test('next=failed when no reviewer finished, even with a fresh report file; done once one did', () => {
+    const run = plannedRun('loop failed reviewers');
+    const helper = (args) => runNode([HELPER, ...args], { cwd: proj, env });
+    for (const [w, status] of [['reviewer', 'failed'], ['reviewer-2', 'report-invalid']]) {
+      assert.equal(helper(['run', 'worker', run.id, w, status]).status, 0);
+    }
+    put(run.dir, 'report-reviewer-2.md', '## Status\nfailed\n', 5);
+    let lines = outLines(run.merge());
+    assert.ok(lines[0].endsWith(' next=failed'), lines[0]);
+    assert.equal(helper(['run', 'worker', run.id, 'reviewer', 'done']).status, 0);
+    lines = outLines(run.merge());
+    assert.ok(lines[0].endsWith(' next=done'), lines[0]);
   });
 
   test('review.maxRounds 0 asks (gate) or stops (auto) on the first merge', () => {

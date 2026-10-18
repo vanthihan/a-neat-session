@@ -301,13 +301,32 @@ function fixFindings(merged, tasks) {
   return { fixTasks, unowned, byTask };
 }
 
-// Pure: what the orchestrator does next. `fix` only while fewer than
-// maxRounds fix rounds ran; after that the user decides (gate, step) or the
-// run stops (auto).
-function reviewNext({ fixTasks, fixRounds, maxRounds, mode }) {
-  if (!fixTasks || fixTasks.length === 0) return 'done';
-  if (fixRounds < maxRounds) return 'fix';
-  return mode === 'auto' ? 'stop' : 'ask';
+// Pure: count of critical findings on paths no plan task owns (no fix
+// round can reach them).
+function unownedCriticals(merged, tasks) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  return merged.filter((m) => m.severity === 'critical'
+    && !list.some((t) => Array.isArray(t.owns) && t.owns.includes(m.path))).length;
+}
+
+// Pure: what the orchestrator does next. `failed` when no reviewer finished
+// its review (`reviewed` false). `fix` only while fewer than maxRounds fix
+// rounds ran; after that the user decides (gate, step) or the run stops
+// (auto). With nothing left to fix, a critical finding no task owns also
+// goes to the user or stops the run, never `done`.
+function reviewNext({ fixTasks, fixRounds, maxRounds, mode, unownedCritical = 0, reviewed = true }) {
+  if (!reviewed) return 'failed';
+  const decide = mode === 'auto' ? 'stop' : 'ask';
+  if (fixTasks && fixTasks.length > 0) return fixRounds < maxRounds ? 'fix' : decide;
+  return unownedCritical > 0 ? decide : 'done';
+}
+
+// True when reviewer `worker` finished its review: its worker status is done,
+// or, with no worker entry (the helper used without the orchestrator), it
+// left a source file.
+function reviewerDone(state, worker, source) {
+  const entry = (Array.isArray(state.workers) ? state.workers : []).find((w) => w.name === worker);
+  return entry ? entry.status === 'done' : source !== null;
 }
 
 // Pure: a new state with a copy of `review`.
@@ -342,6 +361,7 @@ function nextReview(state, merged, inputs, maxRounds) {
     info: counts.info,
     fixTasks,
     unowned,
+    unownedCritical: unownedCriticals(merged, state.tasks),
     inputs,
   };
 }
@@ -366,7 +386,8 @@ function mergeRun(root, id, { env = process.env, now = null } = {}) {
   const file = runState.writeRunFile(root, id, MERGED_FILE, formatMerged(merged));
   const review = nextReview(state, merged, fingerprint([a, b]), maxRounds);
   runState.saveRun(root, setReview(state, review), now || runState.currentTime(env));
-  const next = reviewNext({ ...review, mode: state.mode });
+  const reviewed = reviewerDone(state, 'reviewer', a) || reviewerDone(state, 'reviewer-2', b);
+  const next = reviewNext({ ...review, mode: state.mode, reviewed });
   return { file, counts: countMerged(merged), lines: merged.map(formatLine), merged, review, next, unparsed };
 }
 
@@ -385,6 +406,7 @@ module.exports = {
   mergeFindings,
   formatMerged,
   fixFindings,
+  unownedCriticals,
   reviewNext,
   setReview,
   mergeRun,
