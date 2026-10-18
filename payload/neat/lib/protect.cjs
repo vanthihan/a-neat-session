@@ -2,7 +2,8 @@
 
 // Files that `git status` cannot show but that would let a worker act after
 // its stage ends: git hooks and git config (they run at `neat run commit`),
-// the installed helper, agents and commands, and the Claude Code permission
+// the installed helper, agents, commands and guides (`neat guide` prints
+// them as instructions), and the Claude Code permission
 // settings (project and user level). `run new` records their fingerprints.
 // Every guard reports a change since the previous guard as a violation, and
 // `run commit` refuses while git hooks or git config differ from the record.
@@ -42,6 +43,7 @@ function installPaths() {
     ...entriesOf(__dirname, (n) => n.endsWith('.cjs')),
     ...entriesOf(path.join(INSTALL_ROOT, 'agents'), (n) => n.startsWith('neat-')),
     ...entriesOf(path.join(INSTALL_ROOT, 'commands', 'neat')),
+    ...entriesOf(path.join(INSTALL_ROOT, 'neat', 'guides'), (n) => n.endsWith('.md')),
   ];
 }
 

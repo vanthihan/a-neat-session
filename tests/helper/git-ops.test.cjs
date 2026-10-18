@@ -635,7 +635,7 @@ test('a run without a protected record skips the protected check', () => {
   assert.match(neat(dir, ['run', 'commit', run.id]).stdout, /^committed [0-9a-f]{7} files=1$/m);
 });
 
-test('the protected snapshot covers git hooks and config, the helper, agents, commands and settings', () => {
+test('the protected snapshot covers git hooks and config, the helper, agents, commands, guides and settings', () => {
   const protect = require(path.join(REPO_ROOT, 'payload', 'neat', 'lib', 'protect.cjs'));
   const dir = makeRepo();
   failingHook(dir);
@@ -659,6 +659,8 @@ test('the protected snapshot covers git hooks and config, the helper, agents, co
     path.join(payload, 'neat', 'lib', 'git-ops.cjs'),
     path.join(payload, 'agents', 'neat-researcher.md'),
     path.join(payload, 'commands', 'neat', 'do.md'),
+    path.join(payload, 'neat', 'guides', 'codex.md'),
+    path.join(payload, 'neat', 'guides', 'review.md'),
     path.join(dir, '.claude', 'settings.json'),
     path.join(dir, '.claude', 'settings.local.json'),
     path.join(scratch, 'settings.json'),
