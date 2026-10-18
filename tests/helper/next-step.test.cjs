@@ -167,7 +167,7 @@ describe('nextStep', () => {
       stage: 'review', workers: { reviewer: 'done', 'reviewer-2': 'done' }, extra: { review: { fixTasks: [] } },
     });
     assert.deepEqual(nextStep(finished, facts()), { section: 'Test', line: `run stage ${ID} test, then the Test section` });
-    const merge = makeState({ stage: 'review', workers: { reviewer: 'running' } });
+    const merge = makeState({ stage: 'review', workers: { reviewer: 'done', 'reviewer-2': 'report-invalid' } });
     assert.deepEqual(nextStep(merge, facts(['report-reviewer-2.md', 'report-reviewer.md'])), {
       section: 'Review', line: `guide review step 3 (review merge ${ID})`,
     });
@@ -175,6 +175,16 @@ describe('nextStep', () => {
       stage: 'review', workers: { reviewer: 'done', 'reviewer-2': 'done' }, extra: { review: { fixTasks: ['T1'] } },
     });
     assert.deepEqual(nextStep(fixes, facts(['report-reviewer.md'])), { section: 'Review', line: 'guide review from step 1' });
+  });
+
+  test('review: both reports present but a reviewer not checked -> Check those reviewers before the merge', () => {
+    const reports = facts(['report-reviewer-2.md', 'report-reviewer.md']);
+    for (const mode of ['gate', 'auto']) {
+      const both = makeState({ stage: 'review', mode, workers: { reviewer: 'running', 'reviewer-2': 'running' } });
+      assert.deepEqual(nextStep(both, reports), { section: 'Review', line: 'Worker loop step 4 (Check) with W = reviewer reviewer-2' });
+    }
+    const one = makeState({ stage: 'review', workers: { reviewer: 'done', 'reviewer-2': 'running' } });
+    assert.deepEqual(nextStep(one, reports), { section: 'Review', line: 'Worker loop step 4 (Check) with W = reviewer-2' });
   });
 
   test('review: a critical finding no task owns -> merge again for the decision, never on to Test', () => {
@@ -289,13 +299,34 @@ describe('runFacts', () => {
     try {
       const state = rs.createRun(root, { task: 'facts', mode: 'gate' }, new Date('2026-10-18T12:00:00Z'));
       const dir = rs.runDir(root, state.id);
+      fs.writeFileSync(path.join(dir, 'brief-explorer.md'), 'x');
       fs.writeFileSync(path.join(dir, 'report-tester.md'), 'x');
       fs.writeFileSync(path.join(dir, 'report-explorer.md'), 'x');
-      fs.writeFileSync(path.join(dir, 'brief-explorer.md'), 'x');
       const f = runFacts(root, state);
       assert.deepEqual(f.reports, ['report-explorer.md', 'report-tester.md']);
       assert.deepEqual(f.runningJobs, []);
       assert.equal(f.helper, path.join(REPO_ROOT, 'payload', 'neat', 'bin', 'neat.cjs'));
+    } finally {
+      removeDir(root);
+    }
+  });
+
+  test('leaves out a report older than its worker\'s current brief (an earlier round\'s report)', () => {
+    const root = makeTempDir('neat-next-');
+    try {
+      const state = rs.createRun(root, { task: 'facts', mode: 'gate' }, new Date('2026-10-18T12:00:00Z'));
+      const dir = rs.runDir(root, state.id);
+      const at = (name, sec) => {
+        fs.writeFileSync(path.join(dir, name), 'x');
+        fs.utimesSync(path.join(dir, name), sec, sec);
+      };
+      at('report-reviewer.md', 1000);
+      at('brief-reviewer.md', 2000);
+      at('brief-reviewer-2.md', 2000);
+      at('report-reviewer-2.md', 3000);
+      assert.deepEqual(runFacts(root, state).reports, ['report-reviewer-2.md']);
+      const review = { ...state, stage: 'review', workers: [{ name: 'reviewer', status: 'running' }, { name: 'reviewer-2', status: 'running' }] };
+      assert.equal(nextStep(review, runFacts(root, review)).line, 'guide review from step 1');
     } finally {
       removeDir(root);
     }

@@ -160,9 +160,13 @@ function batchStep(state, facts, stage) {
   return committedIn(state, stage) ? then : askContinue(state, stage, then, `run commit ${state.id}, then `);
 }
 
+const REVIEWERS = Object.freeze(['reviewer', 'reviewer-2']);
+// Worker statuses set by the Check step.
+const CHECKED = Object.freeze(['done', 'failed', 'report-invalid']);
+
 function reviewStep(state, facts) {
   const review = state.review && typeof state.review === 'object' ? state.review : null;
-  const reviewersDone = ['reviewer', 'reviewer-2'].every((w) => workerStatus(state, w) === 'done');
+  const reviewersDone = REVIEWERS.every((w) => workerStatus(state, w) === 'done');
   const noFixes = review && Array.isArray(review.fixTasks) && review.fixTasks.length === 0;
   const merge = step('Review', `guide review step 3 (review merge ${state.id})`);
   if (noFixes && reviewersDone) {
@@ -170,7 +174,12 @@ function reviewStep(state, facts) {
     // auto run); that decision is not kept on disk, so merge again to get it.
     return Number(review.unownedCritical) > 0 ? merge : advance(state, 'review');
   }
-  if (hasReport(facts, 'reviewer') && hasReport(facts, 'reviewer-2')) return merge;
+  if (REVIEWERS.every((w) => hasReport(facts, w))) {
+    // The merge counts only checked reviewers; unchecked ones would read as
+    // "no reviewer finished" and stop an auto run.
+    const unchecked = REVIEWERS.filter((w) => !CHECKED.includes(workerStatus(state, w)));
+    return unchecked.length > 0 ? step('Review', `Worker loop step 4 (Check) with W = ${unchecked.join(' ')}`) : merge;
+  }
   return step('Review', 'guide review from step 1');
 }
 
@@ -296,11 +305,30 @@ function fileStatus(file) {
   }
 }
 
-// Disk facts nextStep needs: report file names, each report's status word
-// (by worker), running Codex jobs, helper path.
+function mtimeMs(file) {
+  try {
+    return fs.statSync(file).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
+// False for a report older than its worker's current brief: it is left from
+// an earlier round (a fix round or a relaunch) and is not this round's report.
+function isCurrentReport(dir, name) {
+  const worker = name.slice('report-'.length, -'.md'.length);
+  const briefTime = mtimeMs(path.join(dir, `brief-${worker}.md`));
+  const reportTime = mtimeMs(path.join(dir, name));
+  return briefTime === null || (reportTime !== null && reportTime >= briefTime);
+}
+
+// Disk facts nextStep needs: this round's report file names, each report's
+// status word (by worker), running Codex jobs, helper path.
 function runFacts(root, state) {
-  const reports = runFiles(root, state.id).filter((n) => /^report-[a-z0-9-]+\.md$/i.test(n)).sort();
   const dir = runState.runDir(root, state.id);
+  const reports = runFiles(root, state.id)
+    .filter((n) => /^report-[a-z0-9-]+\.md$/i.test(n) && isCurrentReport(dir, n))
+    .sort();
   const statuses = {};
   for (const name of reports) {
     const worker = name.slice('report-'.length, -'.md'.length);
