@@ -13,6 +13,7 @@ const {
   REPORT_HEADINGS,
   MAX_REPORT_WORDS,
   REPORT_STATUSES,
+  reportStatus,
 } = require(path.join(REPO_ROOT, 'payload', 'neat', 'lib', 'report-check.cjs'));
 
 const RUN_ID = '20261018-120000-fix-login';
@@ -173,4 +174,11 @@ test('checkReportText keeps the checkReport errors first', () => {
     'status must be one of done|partial|blocked|failed',
     `artifact not found: ${path.join(runDir, 'text-gone.md')}`,
   ]);
+});
+
+test('reportStatus reads the status word of the first Status line, or null', () => {
+  assert.equal(reportStatus(report()), 'done');
+  assert.equal(reportStatus(report({ status: '- **partial**: half of it' })), 'partial');
+  assert.equal(reportStatus(report({ status: 'maybe' })), null);
+  assert.equal(reportStatus('## Findings\n- x\n'), null);
 });

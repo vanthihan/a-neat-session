@@ -9,7 +9,7 @@ const path = require('node:path');
 const { REPO_ROOT, makeTempDir, removeDir } = require('../support/helpers.cjs');
 
 const LIB = path.join(REPO_ROOT, 'payload', 'neat', 'lib');
-const { SECTIONS, nextStep, formatNext, runFacts } = require(path.join(LIB, 'next-step.cjs'));
+const { SECTIONS, nextStep, formatNext, runFacts, resumeLines, taskText } = require(path.join(LIB, 'next-step.cjs'));
 const rs = require(path.join(LIB, 'run-state.cjs'));
 
 const ID = '20261018-120000-add-hello';
@@ -55,7 +55,7 @@ describe('nextStep', () => {
     const state = makeState({ stage: 'explore', type: null, workers: { explorer: 'done' } });
     assert.deepEqual(nextStep(state, facts(['report-explorer.md'])), {
       section: 'Classify',
-      line: `rate the task from report-explorer.md, run classify ${ID} <level>, then stages ${ID} --type <type>`,
+      line: `run report show ${ID} explorer, rate the task from it, run classify ${ID} <level>, then stages ${ID} --type <type>`,
     });
   });
 
@@ -94,16 +94,25 @@ describe('nextStep', () => {
     });
   });
 
-  test('plan without recorded tasks -> Plan', () => {
-    const state = makeState({ stage: 'plan' });
-    assert.deepEqual(nextStep(state, facts()), { section: 'Plan', line: `write plan.md, then plan check ${ID}` });
+  test('plan without recorded tasks -> Plan, reading back the reports it is written from', () => {
+    const state = makeState({ stage: 'plan', workers: { explorer: 'done' } });
+    assert.deepEqual(nextStep(state, facts()), {
+      section: 'Plan',
+      line: `run report show ${ID} explorer, write plan.md from the task text and those reports, then plan check ${ID}`,
+    });
+    const researched = makeState({ stage: 'plan', workers: { explorer: 'done', researcher: 'done' } });
+    assert.deepEqual(nextStep(researched, facts()), {
+      section: 'Plan',
+      line: `run report show ${ID} explorer and report show ${ID} researcher, `
+        + `write plan.md from the task text and those reports, then plan check ${ID}`,
+    });
   });
 
   test('plan with tasks: gate and step -> Approve, auto -> next selected stage', () => {
     const tasks = [T('T1', 'implementer', 1)];
     for (const mode of ['gate', 'step']) {
       assert.deepEqual(nextStep(makeState({ stage: 'plan', mode, tasks }), facts()), {
-        section: 'Approve', line: 'ask for approval again; approval is not kept on disk',
+        section: 'Approve', line: `run plan show ${ID} and ask for approval again with its lines; approval is not kept on disk`,
       });
     }
     assert.deepEqual(nextStep(makeState({ stage: 'plan', mode: 'auto', tasks }), facts()), {
@@ -178,7 +187,10 @@ describe('nextStep', () => {
     const selected = ['explore', 'implement', 'test'];
     const base = { stage: 'test', type: 'small-fix', selected, workers: { tester: 'done' } };
     const commit = { section: 'Commit', line: `the Commit section (run commit ${ID})` };
-    const finish = { section: 'Finish', line: `run stage ${ID} done, then the Finish section` };
+    const finish = {
+      section: 'Finish',
+      line: `run stage ${ID} done, then the Finish section (report show ${ID} <worker> for each report you have not seen)`,
+    };
     assert.deepEqual(nextStep(makeState({ ...base, mode: 'gate' }), facts()), commit);
     assert.deepEqual(nextStep(makeState({ ...base, mode: 'auto' }), facts()), commit);
     assert.deepEqual(nextStep(makeState({ ...base, mode: 'step' }), facts()), finish);
@@ -230,5 +242,57 @@ describe('runFacts', () => {
     } finally {
       removeDir(root);
     }
+  });
+
+  test('reads each report\'s status word; a report without one is invalid', () => {
+    const root = makeTempDir('neat-next-');
+    try {
+      const state = rs.createRun(root, { task: 'facts', mode: 'gate' }, new Date('2026-10-18T12:00:00Z'));
+      const dir = rs.runDir(root, state.id);
+      fs.writeFileSync(path.join(dir, 'report-explorer.md'), '## Status\n\ndone - mapped\n\n## Findings\n- x\n');
+      fs.writeFileSync(path.join(dir, 'report-tester.md'), '## Status\n- **failed**: 2 tests\n');
+      fs.writeFileSync(path.join(dir, 'report-reviewer.md'), 'no headings at all');
+      fs.writeFileSync(path.join(dir, 'report-not-a-worker.md'), '## Status\ndone\n');
+      assert.deepEqual(runFacts(root, state).statuses, { explorer: 'done', tester: 'failed', reviewer: 'invalid' });
+    } finally {
+      removeDir(root);
+    }
+  });
+});
+
+describe('resumeLines', () => {
+  const DIR = '/p/.neat/runs/x';
+
+  test('prints the task text, the report statuses and the plan batches the next section needs', () => {
+    const tasks = [T('T1', 'implementer', 0), T('T2', 'implementer', 1, ['src/T1.js'])];
+    const state = makeState({
+      stage: 'implement', tasks, workers: { explorer: 'done', 'implementer-T1': 'done' },
+      extra: { task: 'add a hello function\nand test it' },
+    });
+    const lines = resumeLines(state, { ...facts(), statuses: { explorer: 'done', 'implementer-T1': 'partial' } }, DIR);
+    assert.deepEqual(lines.slice(0, 6), [
+      `run=${ID} mode=gate stage=implement type=feature dir=${DIR}`,
+      'task: add a hello function / and test it',
+      'workers: done=explorer,implementer-T1 running=none failed=none',
+      'reports: explorer=done implementer-T1=partial',
+      'plan: stages=explore,plan,implement,review,test,docs implement=[T1] [T2] docs=none',
+      'next: Implement - Worker loop with W = implementer-T2 and G = --tasks T2',
+    ]);
+    assert.ok(lines[6].includes(`report show ${ID} <worker>`), lines[6]);
+    assert.ok(lines.length <= 7);
+  });
+
+  test('without reports or a checked plan it says none and prints no plan line', () => {
+    const state = makeState({ stage: 'explore', type: null, extra: { task: 'x' } });
+    const lines = resumeLines(state, facts(), DIR);
+    assert.ok(lines.includes('reports: none'), lines.join('\n'));
+    assert.ok(!lines.some((l) => l.startsWith('plan: ')), lines.join('\n'));
+  });
+
+  test('taskText strips escape sequences and control characters, joins lines and caps the length', () => {
+    assert.equal(taskText('fix \u001b[31mred\u001b[0m\r\n  bug\u0007 \n\n'), 'fix red / bug');
+    assert.equal(taskText(undefined), '');
+    const long = taskText('a'.repeat(5000));
+    assert.ok(long.startsWith('a'.repeat(2000)) && long.endsWith(' [cut; full text in state.json]'), long.slice(-40));
   });
 });

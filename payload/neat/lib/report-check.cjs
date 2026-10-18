@@ -55,12 +55,25 @@ function sectionLines(lines, headings, heading) {
   return lines.slice(start.index + 1, next ? next.index : lines.length);
 }
 
-function statusErrors(lines, headings) {
+// The status word of the first non-empty line under ## Status: a value of
+// REPORT_STATUSES, '' when that line has none, or null without the heading.
+function statusOf(lines, headings) {
   const body = sectionLines(lines, headings, '## Status');
-  if (body === null) return [];
+  if (body === null) return null;
   const first = body.find((l) => l.trim() !== '');
-  const value = (first || '').toLowerCase().replace(/^[\s*`-]+/, '');
-  return STATUS_LINE.test(value) ? [] : [`status must be one of ${REPORT_STATUSES.join('|')}`];
+  const m = STATUS_LINE.exec((first || '').toLowerCase().replace(/^[\s*`-]+/, ''));
+  return m ? m[1] : '';
+}
+
+function statusErrors(lines, headings) {
+  const status = statusOf(lines, headings);
+  return status === null || status !== '' ? [] : [`status must be one of ${REPORT_STATUSES.join('|')}`];
+}
+
+// The report's status (done, partial, blocked or failed), or null.
+function reportStatus(text) {
+  const lines = String(text).split(/\r?\n/);
+  return statusOf(lines, headingLines(lines)) || null;
 }
 
 function checkReport(text) {
@@ -142,4 +155,5 @@ module.exports = {
   checkReport,
   checkReportText,
   checkReportFile,
+  reportStatus,
 };

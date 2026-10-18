@@ -421,7 +421,11 @@ reaches `context.warn` (default 60%). At
 `context.critical` (default 75%) the orchestrator finishes the current step,
 starts no new workers and tells you to run `/clear` and then
 `/neat:resume <id>`. The resumed session reads the run state from disk and
-continues at the right section. Context numbers come from the
+continues at the right section: `neat run resume` prints the task text, each
+worker report's status, the plan batches and the next step, and the
+orchestrator gets back a report or the plan it no longer has with
+`neat report show <run-id> <worker>` and `neat plan show <run-id>`. Context
+numbers come from the
 [usage capture](#usage-capture-status-line).
 
 ### Noisy output filter (PreToolUse)

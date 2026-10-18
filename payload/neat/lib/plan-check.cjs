@@ -173,6 +173,16 @@ function formatBatches(groups) {
   return groups.map((g) => `[${g.join(',')}]`).join(' ');
 }
 
+// `stages=... implement=[...] docs=[...]` for `tasks` and the selected stages.
+function batchesText(tasks, selected) {
+  const batches = computeBatches(tasks);
+  return [
+    `stages=${selected.join(',')}`,
+    `implement=${formatBatches(batches.implement)}`,
+    `docs=${formatBatches(batches.docs)}`,
+  ].join(' ');
+}
+
 // Validates plan.md of run `id`; on success records tasks (with batch) in state.json.
 function checkPlan(root, id, now) {
   const state = runState.loadRun(root, id);
@@ -184,14 +194,48 @@ function checkPlan(root, id, now) {
   const numbers = batchNumbers(tasks);
   const recorded = tasks.map((t) => ({ ...t, owns: [...t.owns], batch: numbers.get(t.id) }));
   runState.saveRun(root, { ...state, tasks: recorded }, now);
-  const batches = computeBatches(tasks);
-  const line = [
-    `plan ok tasks=${tasks.length}`,
-    `stages=${selected.join(',')}`,
-    `implement=${formatBatches(batches.implement)}`,
-    `docs=${formatBatches(batches.docs)}`,
-  ].join(' ');
-  return { ok: true, lines: [line] };
+  return { ok: true, lines: [`plan ok tasks=${tasks.length} ${batchesText(tasks, selected)}`] };
 }
 
-module.exports = { parsePlan, computeBatches, checkPlan, isReservedPath, MAX_ERROR_LINES };
+const MAX_SHOW_LINES = 15;
+const MAX_SHOW_LINE = 200;
+const SHOWN_TASK_ID = /^[TD]\d+$/;
+// ANSI escape sequences and control characters, removed from shown text.
+const UNSAFE_TEXT = /\u001b(?:\[[0-?]*[ -/]*[@-~]|[@-_])|[\u0000-\u001f\u007f-\u009f]/g;
+
+function showText(value) {
+  return String(value).replace(UNSAFE_TEXT, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Recorded plan tasks of a state that are safe to show and to batch.
+function recordedTasks(state) {
+  const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+  return tasks.filter((t) => t && SHOWN_TASK_ID.test(t.id) && WORKER_FOR_PREFIX[t.id[0]] === t.worker
+    && Array.isArray(t.owns) && t.owns.every((p) => typeof p === 'string'));
+}
+
+// `stages=... implement=[...] docs=[...]` of the recorded plan, or null when
+// no task is recorded.
+function planBatchesLine(state) {
+  const tasks = recordedTasks(state);
+  return tasks.length > 0 ? batchesText(tasks, selectedOf(state)) : null;
+}
+
+// The recorded plan of run `id` for an approval after a resume: the batches
+// line, then one line per task (id, worker, title, owned files), at most
+// MAX_SHOW_LINES lines in all.
+function showPlan(root, id) {
+  const state = runState.loadRun(root, id);
+  const tasks = recordedTasks(state);
+  if (tasks.length === 0) return { ok: false, lines: [`no checked plan in run ${id}; run plan check ${id}`] };
+  const room = MAX_SHOW_LINES - 1;
+  const shown = tasks.length > room ? tasks.slice(0, room - 1) : tasks;
+  const lines = shown.map((t) => `${t.id} (${t.worker}): ${showText(t.title || '')}; owns: ${showText(t.owns.join(', '))}`
+    .slice(0, MAX_SHOW_LINE));
+  if (shown.length < tasks.length) lines.push(`... ${tasks.length - shown.length} more tasks in plan.md`);
+  return { ok: true, lines: [`plan tasks=${tasks.length} ${planBatchesLine(state)}`, ...lines] };
+}
+
+module.exports = {
+  parsePlan, computeBatches, checkPlan, planBatchesLine, showPlan, isReservedPath, MAX_ERROR_LINES, MAX_SHOW_LINES,
+};

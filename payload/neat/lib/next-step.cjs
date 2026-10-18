@@ -2,14 +2,18 @@
 
 // The next orchestrator step of a run, decided from its state and a few disk
 // facts. nextStep is pure: every disk fact comes in through `facts`
-// (runFacts). Lines hold only fixed text, ids, stage, section and worker
-// names, never report, brief or plan text.
+// (runFacts). Next lines hold only fixed text, ids, stage, section and worker
+// names, never report, brief or plan text. `run resume` adds the task text
+// and each report's status word, so a session that starts over after /clear
+// has what the next section needs; report text comes only from
+// `report show`.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const runState = require('./run-state.cjs');
 const { selectedOf } = require('./stages.cjs');
-const { computeBatches } = require('./plan-check.cjs');
+const { computeBatches, planBatchesLine } = require('./plan-check.cjs');
+const { reportStatus } = require('./report-check.cjs');
 
 // Pipeline stage -> section of the orchestrator procedure.
 const SECTIONS = Object.freeze({
@@ -33,6 +37,10 @@ const BATCH_KINDS = Object.freeze({
 // Stages run by a single worker.
 const SINGLE_WORKER = Object.freeze({ research: 'researcher', test: 'tester' });
 const WORD = /^[a-z][a-z-]{0,31}$/;
+const MAX_TASK_TEXT = 2000;
+const MAX_REPORT_READ = 64 * 1024;
+// ANSI escape sequences and control characters, removed from the task text.
+const UNSAFE_TEXT = /\u001b(?:\[[0-?]*[ -/]*[@-~]|[@-_])|[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 
 function step(section, line) {
   return { section, line };
@@ -60,7 +68,7 @@ function closing(state) {
   if (commits.length === 0 && (state.mode === 'gate' || state.mode === 'auto')) {
     return step('Commit', `the Commit section (run commit ${state.id})`);
   }
-  return step('Finish', `run stage ${state.id} done, then the Finish section`);
+  return step('Finish', `run stage ${state.id} done, then the Finish section (report show ${state.id} <worker> for each report you have not seen)`);
 }
 
 // The first selected stage after `current` that is neither done nor skipped.
@@ -85,16 +93,21 @@ function exploreStep(state, facts) {
   if (pending) return pending;
   if (!state.type) {
     const { id } = state;
-    return step('Classify', `rate the task from report-explorer.md, run classify ${id} <level>, then stages ${id} --type <type>`);
+    return step('Classify', `run report show ${id} explorer, rate the task from it, run classify ${id} <level>, then stages ${id} --type <type>`);
   }
   return advance(state, 'explore');
 }
 
 function planStep(state) {
+  const { id } = state;
   const tasks = Array.isArray(state.tasks) ? state.tasks : [];
-  if (tasks.length === 0) return step('Plan', `write plan.md, then plan check ${state.id}`);
+  if (tasks.length === 0) {
+    const shows = [`report show ${id} explorer`];
+    if (workerStatus(state, 'researcher') === 'done') shows.push(`report show ${id} researcher`);
+    return step('Plan', `run ${shows.join(' and ')}, write plan.md from the task text and those reports, then plan check ${id}`);
+  }
   if (state.mode === 'gate' || state.mode === 'step') {
-    return step('Approve', 'ask for approval again; approval is not kept on disk');
+    return step('Approve', `run plan show ${id} and ask for approval again with its lines; approval is not kept on disk`);
   }
   return advance(state, 'plan');
 }
@@ -176,20 +189,45 @@ function workerNames(state, statuses) {
   return names.length > 0 ? names.join(',') : 'none';
 }
 
-// The lines `run resume` prints: run line, worker states, next step and,
-// when there is something to resume, how to load the procedure.
+// The run's task text on one line: escape sequences and control characters
+// removed, lines joined with ' / ', at most MAX_TASK_TEXT characters.
+function taskText(task) {
+  const lines = String(task || '').replace(UNSAFE_TEXT, '').split(/\r?\n|\r/)
+    .map((l) => l.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+  const text = lines.join(' / ');
+  return text.length > MAX_TASK_TEXT ? `${text.slice(0, MAX_TASK_TEXT)} [cut; full text in state.json]` : text;
+}
+
+// `explorer=done tester=failed`: each report's status word, or `none`.
+function reportsLine(facts) {
+  const statuses = facts.statuses || {};
+  const pairs = Object.keys(statuses).sort()
+    .filter((w) => runState.WORKER_NAME.test(w))
+    .map((w) => `${w}=${safeWord(statuses[w]) === 'unknown' ? 'invalid' : statuses[w]}`);
+  return pairs.length > 0 ? pairs.join(' ') : 'none';
+}
+
+// The lines `run resume` prints (at most 7): run line, task text, worker
+// states, report statuses, the plan batches once a plan is checked, the next
+// step and, when there is something to resume, how to load the procedure.
 function resumeLines(state, facts, dir) {
   const next = nextStep(state, facts);
   const type = state.type ? safeWord(state.type) : 'none';
+  const batches = planBatchesLine(state);
   const lines = [
     `run=${state.id} mode=${safeWord(state.mode)} stage=${safeWord(state.stage)} type=${type} dir=${dir}`,
+    `task: ${taskText(state.task) || '(empty)'}`,
     `workers: done=${workerNames(state, ['done'])} running=${workerNames(state, ['running'])} `
       + `failed=${workerNames(state, ['failed', 'report-invalid'])}`,
+    `reports: ${reportsLine(facts)}`,
+    ...(batches ? [`plan: ${batches}`] : []),
     formatNext(next),
   ];
   if (next.section) {
     const helper = facts.helper || HELPER;
-    lines.push(`procedure: run node ${helper} procedure once; skip Start (keep id, mode and dir above) and continue at ## ${next.section}`);
+    lines.push(`procedure: run node ${helper} procedure once; skip Start (keep id, mode, dir and task above) and continue at ## ${next.section}; `
+      + `for a report you have not seen run node ${helper} report show ${state.id} <worker>`);
   }
   return lines;
 }
@@ -209,10 +247,33 @@ function runningJobIds(root, id) {
   return jobs.listJobs(root).filter((r) => r.runId === id && r.status === 'running').map((r) => r.id);
 }
 
-// Disk facts nextStep needs: report file names, running Codex jobs, helper path.
-function runFacts(root, state) {
-  const reports = runFiles(root, state.id).filter((n) => /^report-[a-z0-9-]+\.md$/i.test(n)).sort();
-  return { reports, runningJobs: runningJobIds(root, state.id), helper: HELPER };
+// The status word of a report file (read up to MAX_REPORT_READ bytes), or
+// null when it is not a regular file or has no valid status.
+function fileStatus(file) {
+  let fd;
+  try {
+    if (!fs.lstatSync(file).isFile()) return null;
+    fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(MAX_REPORT_READ);
+    return reportStatus(buf.subarray(0, fs.readSync(fd, buf, 0, MAX_REPORT_READ, 0)).toString('utf8'));
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
 }
 
-module.exports = { SECTIONS, nextStep, formatNext, runFacts, resumeLines, safeWord };
+// Disk facts nextStep needs: report file names, each report's status word
+// (by worker), running Codex jobs, helper path.
+function runFacts(root, state) {
+  const reports = runFiles(root, state.id).filter((n) => /^report-[a-z0-9-]+\.md$/i.test(n)).sort();
+  const dir = runState.runDir(root, state.id);
+  const statuses = {};
+  for (const name of reports) {
+    const worker = name.slice('report-'.length, -'.md'.length);
+    if (runState.WORKER_NAME.test(worker)) statuses[worker] = fileStatus(path.join(dir, name)) || 'invalid';
+  }
+  return { reports, statuses, runningJobs: runningJobIds(root, state.id), helper: HELPER };
+}
+
+module.exports = { SECTIONS, nextStep, formatNext, runFacts, resumeLines, safeWord, taskText };
