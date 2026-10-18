@@ -1,5 +1,5 @@
 ---
-description: Show neat runs, current stage and active workers
+description: Show neat runs, current stage, active workers and Codex jobs
 allowed-tools: Bash(node {{NEAT_BIN}} *)
 disable-model-invocation: true
 ---

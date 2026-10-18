@@ -87,8 +87,10 @@ function findJob(root, jobId) {
   throw new UsageError(`job not found: ${jobId}`);
 }
 
-// Records of one run, newest first (by the prompt file's write time).
-function runJobs(root, runId) {
+// Records of one run, newest first (by the prompt file's write time). With
+// `unreadable`, a job file that cannot be parsed yields
+// { id, runId, status: 'unreadable' } instead of being left out.
+function runJobs(root, runId, { unreadable = false } = {}) {
   const dir = jobsDir(root, runId);
   if (!fs.existsSync(dir)) return [];
   const stamp = (r) => {
@@ -100,16 +102,19 @@ function runJobs(root, runId) {
   };
   return fs.readdirSync(dir)
     .filter((name) => name.endsWith('.json') && JOB_ID.test(name.slice(0, -5)))
-    .map((name) => readJob(root, runId, name.slice(0, -5)))
+    .map((name) => {
+      const id = name.slice(0, -5);
+      return readJob(root, runId, id) || (unreadable ? { id, runId, status: 'unreadable' } : null);
+    })
     .filter(Boolean)
     .map((r) => ({ record: r, t: stamp(r) }))
     .sort((a, b) => b.t - a.t)
     .map((x) => x.record);
 }
 
-// Every job, newest run first.
-function listJobs(root) {
-  return runIdsNewestFirst(root).flatMap((runId) => runJobs(root, runId));
+// Every job, newest run first (options as for runJobs).
+function listJobs(root, options = {}) {
+  return runIdsNewestFirst(root).flatMap((runId) => runJobs(root, runId, options));
 }
 
 // Newest job of the newest run that has jobs, or null.

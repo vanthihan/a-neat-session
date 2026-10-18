@@ -20,6 +20,7 @@ const stages = require(path.join(LIB, 'stages.cjs'));
 const codexCli = require(path.join(LIB, 'cli-codex.cjs'));
 const codex = require(path.join(LIB, 'codex.cjs'));
 const guide = require(path.join(LIB, 'guide.cjs'));
+const jobs = require(path.join(LIB, 'jobs.cjs'));
 
 const MAX_ERROR_LINES = 5;
 
@@ -172,13 +173,26 @@ function cmdRoute(args) {
   return 0;
 }
 
+// Codex job summaries for status, newest first. Read-only: a running record
+// whose process is gone shows as `lost` without being rewritten.
+function statusJobs(root) {
+  const display = (r) => (r.status === 'running' && !jobs.isAlive(r) ? 'lost' : r.status);
+  return jobs.listJobs(root, { unreadable: true })
+    .map((r) => ({
+      id: r.id, runId: r.runId, worker: r.worker, mode: r.mode, status: display(r), startedAt: r.startedAt,
+    }))
+    .sort((a, b) => String(b.startedAt || '').localeCompare(String(a.startedAt || '')));
+}
+
 // Always exits 0 so it can feed a command's `!` injection.
 function cmdStatus(args) {
   const json = args[0] === '--json';
   if (args.length > (json ? 1 : 0)) throw new UsageError('usage: neat status [--json]');
   const root = runState.projectRoot(process.env, process.cwd());
   try {
-    out(formatStatus(runState.listRuns(root), { json, runsDir: runState.runsDir(root) }));
+    const now = runState.currentTime(process.env);
+    const opts = { json, runsDir: runState.runsDir(root), jobs: statusJobs(root), now };
+    out(formatStatus(runState.listRuns(root), opts));
   } catch (err) {
     out(`neat: status failed: ${err.message}`);
   }
