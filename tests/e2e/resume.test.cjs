@@ -377,6 +377,43 @@ describe('run resume and procedure through the installed helper', () => {
   });
 });
 
+describe('run resume in a new session', () => {
+  const REPO_HELPER = path.join(REPO_ROOT, 'payload', 'neat', 'bin', 'neat.cjs');
+  let proj;
+
+  before(() => {
+    proj = makeTempDir('neat-resume-bind-');
+  });
+
+  after(() => removeDir(proj));
+
+  test('resume ties the run to the resuming session, so its compaction re-inject finds the run', () => {
+    const env = childEnv({ NEAT_PROJECT_DIR: proj, NEAT_NOW: NOW });
+    const withSession = (sid) => ({ ...env, CLAUDE_CODE_SESSION_ID: sid });
+    const helperIn = (sid, args) => runNode([REPO_HELPER, ...args], { cwd: proj, env: withSession(sid) });
+    const id = /^id=(\S+)/.exec(helperIn('sess-old', ['run', 'new', 'bind me']).stdout)[1];
+    assert.equal(helperIn('sess-old', ['run', 'stage', id, 'explore']).status, 0);
+    const stateFile = path.join(proj, '.neat', 'runs', id, 'state.json');
+    assert.equal(readJson(stateFile).sessionId, 'sess-old');
+    const compactIn = (sid) => runHookCommand(`node ${REPO_HELPER} hook session-start`, {
+      projectDir: proj, input: JSON.stringify({ hook_event_name: 'SessionStart', source: 'compact', session_id: sid }),
+    }).stdout;
+    assert.equal(compactIn('sess-new'), '', 'before resume the new session does not own the run');
+
+    const res = helperIn('sess-new', ['run', 'resume', id]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(readJson(stateFile).sessionId, 'sess-new');
+    assert.ok(compactIn('sess-new').includes(`neat run ${id} is active`));
+    assert.equal(compactIn('sess-old'), '', 'the old session no longer owns the run');
+
+    assert.equal(helperIn('bad id!', ['run', 'resume', id]).status, 0);
+    assert.equal(readJson(stateFile).sessionId, 'sess-new', 'an invalid session id is ignored');
+    assert.equal(helperIn('sess-new', ['run', 'stage', id, 'done']).status, 0);
+    assert.equal(helperIn('sess-later', ['run', 'resume', id]).status, 0);
+    assert.equal(readJson(stateFile).sessionId, 'sess-new', 'a finished run is not rebound');
+  });
+});
+
 describe('which install answers the hook', () => {
   let tmp;
   let local;

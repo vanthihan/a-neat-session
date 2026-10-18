@@ -411,7 +411,8 @@ After a compaction or a resumed session, the hook tells the session which run
 of this session is active: its id, mode, stage, the first line of the task,
 the exact next step and the pointer `/neat:resume <id>`. After `/clear` it
 prints a one-line pointer to the newest unfinished run. It never injects
-report, brief or plan text.
+report, brief or plan text. `/neat:resume` ties the run to the session that
+resumes it, so the hooks follow the run into that session.
 
 ### Context warnings
 

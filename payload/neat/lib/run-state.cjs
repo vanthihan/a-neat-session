@@ -383,6 +383,7 @@ module.exports = {
   listRuns,
   activeRuns,
   runOfSession,
+  cleanSessionId,
   guardKey,
   writeRunFile,
 };

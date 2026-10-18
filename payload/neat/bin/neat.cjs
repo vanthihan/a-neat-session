@@ -362,9 +362,19 @@ function cmdRunResume(args) {
     out(`no unfinished neat run in ${root}`);
     return 0;
   }
-  const facts = nextStepLib.runFacts(root, state);
-  nextStepLib.resumeLines(state, facts, runState.runDir(root, state.id)).forEach((line) => out(line));
+  const current = bindSession(root, state, now);
+  const facts = nextStepLib.runFacts(root, current);
+  nextStepLib.resumeLines(current, facts, runState.runDir(root, current.id)).forEach((line) => out(line));
   return 0;
+}
+
+// Ties an unfinished run to the session that resumes it (a /clear starts a
+// new session id), so the hooks of that session find the run again.
+function bindSession(root, state, now) {
+  const sessionId = runState.cleanSessionId(process.env.CLAUDE_CODE_SESSION_ID);
+  const finished = runState.TERMINAL_STAGES.includes(state.stage);
+  if (!sessionId || finished || state.sessionId === sessionId) return state;
+  return { ...runState.updateRun(root, state.id, (s) => ({ ...s, sessionId }), now), id: state.id };
 }
 
 const PROCEDURE_FILE = path.resolve(__dirname, '..', '..', 'commands', 'neat', 'do.md');
