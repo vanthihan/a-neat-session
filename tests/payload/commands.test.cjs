@@ -124,13 +124,7 @@ describe('do.md', () => {
   });
 
   test('$ARGUMENTS appears once, inside the quoted run new heredoc', () => {
-    const at = lines.reduce((acc, line, i) => (line.includes('$ARGUMENTS') ? [...acc, i] : acc), []);
-    assert.equal(at.length, 1, `found $ARGUMENTS on ${at.length} lines`);
-    const i = at[0];
-    assert.equal(lines[i], '$ARGUMENTS');
-    assert.ok(lines[i - 1].endsWith("run new --stdin <<'NEAT_EOF'"), lines[i - 1]);
-    assert.equal(lines[i + 1], 'NEAT_EOF');
-    assert.deepEqual(lines.filter((l) => l.startsWith('!') && l.includes('$ARGUMENTS')), []);
+    assertArgumentsHeredoc(lines, "run new --stdin <<'NEAT_EOF'");
   });
 
   test('H2 sections are exactly the fourteen sections, in order', () => {
@@ -163,6 +157,58 @@ describe('do.md', () => {
     assert.ok(words <= MAX_BODY_WORDS, `${words} words`);
   });
 });
+
+// Asserts that $ARGUMENTS appears once, alone on its line, inside a quoted
+// heredoc whose opening line ends with `opener`, and never on a `!` line.
+function assertArgumentsHeredoc(lines, opener) {
+  const at = lines.reduce((acc, line, i) => (line.includes('$ARGUMENTS') ? [...acc, i] : acc), []);
+  assert.equal(at.length, 1, `found $ARGUMENTS on ${at.length} lines`);
+  const i = at[0];
+  assert.equal(lines[i], '$ARGUMENTS');
+  assert.ok(lines[i - 1].endsWith(opener), lines[i - 1]);
+  assert.equal(lines[i + 1], 'NEAT_EOF');
+  assert.deepEqual(lines.filter((l) => l.startsWith('!') && l.includes('$ARGUMENTS')), []);
+}
+
+const JOB_COMMANDS = [
+  { file: 'result.md', verb: 'result', hint: '"[job-id]"' },
+  { file: 'cancel.md', verb: 'cancel', hint: '"<job-id>"' },
+];
+
+for (const { file, verb, hint } of JOB_COMMANDS) {
+  describe(file, () => {
+    const text = load(file);
+    const { keys, fields, body } = parseCommand(text);
+    const lines = text.split(/\r?\n/);
+
+    test('frontmatter keys are exactly description, argument-hint, allowed-tools, disable-model-invocation', () => {
+      assert.deepEqual(keys, ['description', 'argument-hint', 'allowed-tools', 'disable-model-invocation']);
+    });
+
+    test('names Codex jobs, is user-invoked only and may only run the helper', () => {
+      assert.ok(fields.description.length > 0 && fields.description.length <= MAX_DESCRIPTION);
+      assert.match(fields.description, /Codex job/);
+      assert.equal(fields['argument-hint'], hint);
+      assert.equal(fields['allowed-tools'], 'Bash(node {{NEAT_BIN}} *)');
+      assert.equal(fields['disable-model-invocation'], 'true');
+    });
+
+    test(`the argument reaches codex ${verb} only through the quoted heredoc`, () => {
+      assertArgumentsHeredoc(lines, `node {{NEAT_BIN}} codex ${verb} --stdin <<'NEAT_EOF'`);
+      assert.deepEqual(lines.filter((l) => l.startsWith('!')), []);
+    });
+
+    test('every helper call names a subcommand listed by neat help', () => {
+      assert.ok(assertKnownHelperCalls(body, helpSubcommands()) >= 1);
+    });
+
+    test('prints the helper output verbatim and runs nothing else', () => {
+      assert.match(body, /verbatim/);
+      assert.match(body, /Do not read any files or run other commands/);
+      assert.ok(body.includes('NEAT_EOF'));
+    });
+  });
+}
 
 describe('guides', () => {
   test('the codex guide ships', () => {
@@ -229,6 +275,16 @@ describe('local install renders every command and agent', () => {
     const left = mdFiles.filter((f) => fs.readFileSync(path.join(root, f), 'utf8').includes('{{NEAT_BIN}}'));
     assert.deepEqual(left, []);
     assert.ok(mdFiles.map((f) => f.split(path.sep).join('/')).includes('neat/guides/codex.md'), mdFiles.join(', '));
+  });
+
+  test('installed result and cancel commands name the installed helper', () => {
+    const installed = path.join(proj, '.claude', 'neat', 'bin', 'neat.cjs');
+    for (const { file, verb } of JOB_COMMANDS) {
+      const text = fs.readFileSync(path.join(proj, '.claude', 'commands', 'neat', file), 'utf8');
+      assert.ok(text.includes(`node ${installed} codex ${verb} --stdin <<'NEAT_EOF'`), text);
+      assert.ok(text.includes(`Bash(node ${installed} *)`), text);
+      assert.ok(!text.includes('{{NEAT_BIN}}'));
+    }
   });
 
   test('the installed helper prints the guide with its own path', () => {

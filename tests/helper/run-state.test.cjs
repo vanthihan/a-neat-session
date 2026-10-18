@@ -261,3 +261,152 @@ test('status.md injects the helper status output', () => {
   const md = fs.readFileSync(path.join(REPO_ROOT, 'payload', 'commands', 'neat', 'status.md'), 'utf8');
   assert.ok(md.split('\n').includes('!`node {{NEAT_BIN}} status`'));
 });
+
+// ---- Codex jobs in status ----
+
+const { spawn, spawnSync } = require('node:child_process');
+
+const STATUS_NOW = '2026-10-18T11:00:00Z';
+
+function writeJobRecord(proj, runId, record) {
+  const dir = path.join(proj, '.neat', 'runs', runId, 'jobs');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${record.id}.json`);
+  fs.writeFileSync(file, `${JSON.stringify({ runId, mode: 'bg', exitCode: null, ...record }, null, 2)}\n`);
+  return file;
+}
+
+// A live process whose command line carries `jobId`, like a real job wrapper.
+function liveJobProcess(jobId) {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', jobId], { stdio: 'ignore' });
+  return child;
+}
+
+function deadPid() {
+  return spawnSync(process.execPath, ['-e', '']).pid;
+}
+
+// Every file under dir with its size and mtime, for "status writes nothing" checks.
+function snapshot(dir) {
+  return fs.readdirSync(dir, { recursive: true }).map(String).sort().map((rel) => {
+    const st = fs.statSync(path.join(dir, rel));
+    return `${rel} ${st.size} ${st.mtimeMs}`;
+  });
+}
+
+test('status lists Codex jobs newest first with run, worker, mode, status and age', () => {
+  withProject((proj, neat) => {
+    const older = newRun(neat, 'older task', '2026-10-18T08:00:00Z');
+    const newer = newRun(neat, 'newer task', '2026-10-18T10:00:00Z');
+    const live = liveJobProcess('reviewer-aaaa');
+    try {
+      writeJobRecord(proj, older, {
+        id: 'implementer-t1-0b0b', worker: 'implementer-T1', status: 'done', pid: deadPid(),
+        startedAt: '2026-10-18T08:00:00.000Z', exitCode: 0,
+      });
+      writeJobRecord(proj, newer, {
+        id: 'reviewer-aaaa', worker: 'reviewer', mode: 'tmux', status: 'running', pid: live.pid,
+        startedAt: '2026-10-18T10:59:30.000Z',
+      });
+      const lostFile = writeJobRecord(proj, newer, {
+        id: 'tester-cccc', worker: 'tester', status: 'running', pid: deadPid(),
+        startedAt: '2026-10-18T10:58:00.000Z',
+      });
+      const before = snapshot(path.join(proj, '.neat'));
+      const res = neat(['status'], { NEAT_NOW: STATUS_NOW });
+      assert.equal(res.status, 0, res.stderr);
+      const lines = res.stdout.trimEnd().split('\n');
+      assert.equal(lines[0], `neat runs: 2 (showing 2) in ${path.join(proj, '.neat', 'runs')}`);
+      assert.deepEqual(lines.slice(3), [
+        'codex jobs: 3 (showing 3)',
+        `reviewer-aaaa  run=${newer}  worker=reviewer  mode=tmux  status=running  age=30s`,
+        `tester-cccc  run=${newer}  worker=tester  mode=bg  status=lost  age=2m`,
+        `implementer-t1-0b0b  run=${older}  worker=implementer-T1  mode=bg  status=done  age=3h`,
+      ]);
+      assert.deepEqual(snapshot(path.join(proj, '.neat')), before, 'status must not write any file');
+      assert.equal(JSON.parse(fs.readFileSync(lostFile, 'utf8')).status, 'running');
+    } finally {
+      live.kill('SIGKILL');
+    }
+  });
+});
+
+test('status without jobs has no jobs section', () => {
+  withProject((proj, neat) => {
+    const id = newRun(neat, 'plain task');
+    const res = neat(['status']);
+    assert.equal(res.status, 0);
+    assert.equal(res.stdout, [
+      `neat runs: 1 (showing 1) in ${path.join(proj, '.neat', 'runs')}`,
+      `${id}  mode=gate  stage=created  active=-  updated=2026-10-18T10:00:00.000Z`,
+      '',
+    ].join('\n'));
+  });
+});
+
+test('status shows at most 10 jobs and marks a corrupt job file unreadable', () => {
+  withProject((proj, neat) => {
+    const id = newRun(neat, 'many jobs');
+    for (let i = 0; i < 11; i += 1) {
+      writeJobRecord(proj, id, {
+        id: `docs-d${i}-00${String(i).padStart(2, '0')}`, worker: `docs-D${i}`, status: 'done', pid: deadPid(),
+        startedAt: `2026-10-18T10:${String(i).padStart(2, '0')}:00.000Z`,
+      });
+    }
+    const badDir = path.join(proj, '.neat', 'runs', id, 'jobs');
+    fs.writeFileSync(path.join(badDir, 'reviewer-dead.json'), '{ not json');
+    const res = neat(['status'], { NEAT_NOW: STATUS_NOW });
+    assert.equal(res.status, 0, res.stderr);
+    const lines = res.stdout.trimEnd().split('\n');
+    const at = lines.indexOf('codex jobs: 12 (showing 10)');
+    assert.ok(at > 0, res.stdout);
+    assert.equal(lines.length, at + 11);
+    assert.equal(lines[at + 1], `docs-d10-0010  run=${id}  worker=docs-D10  mode=bg  status=done  age=50m`);
+
+    const few = makeTempDir('neat-cli-state-');
+    try {
+      const env = childEnv({ NEAT_PROJECT_DIR: few, NEAT_NOW: STATUS_NOW });
+      const runId = /^id=(\S+)/.exec(runNode([HELPER, 'run', 'new', 'one job'], { cwd: few, env }).stdout)[1];
+      fs.mkdirSync(path.join(few, '.neat', 'runs', runId, 'jobs'));
+      fs.writeFileSync(path.join(few, '.neat', 'runs', runId, 'jobs', 'reviewer-dead.json'), '{ not json');
+      const out = runNode([HELPER, 'status'], { cwd: few, env });
+      assert.equal(out.status, 0, out.stderr);
+      assert.ok(out.stdout.endsWith(`codex jobs: 1 (showing 1)\nreviewer-dead  run=${runId}  unreadable\n`), out.stdout);
+    } finally {
+      removeDir(few);
+    }
+  });
+});
+
+test('status --json gives every run summary a jobs array', () => {
+  withProject((proj, neat) => {
+    const older = newRun(neat, 'older', '2026-10-18T08:00:00Z');
+    const newer = newRun(neat, 'newer', '2026-10-18T09:00:00Z');
+    writeJobRecord(proj, newer, {
+      id: 'reviewer-abcd', worker: 'reviewer', status: 'running', pid: deadPid(), startedAt: '2026-10-18T09:30:00.000Z',
+    });
+    const res = neat(['status', '--json'], { NEAT_NOW: STATUS_NOW });
+    assert.equal(res.status, 0, res.stderr);
+    const runs = JSON.parse(res.stdout);
+    assert.deepEqual(runs.map((r) => r.id), [newer, older]);
+    assert.deepEqual(runs[0].jobs, [
+      { id: 'reviewer-abcd', worker: 'reviewer', mode: 'bg', status: 'lost', startedAt: '2026-10-18T09:30:00.000Z' },
+    ]);
+    assert.deepEqual(runs[1].jobs, []);
+  });
+});
+
+test('formatStatus renders jobs with ages from the given clock', () => {
+  const runs = [{ id: 'r1', mode: 'auto', stage: 'review', workers: [], updatedAt: 'u' }];
+  const jobs = [
+    { id: 'reviewer-0001', runId: 'r1', worker: 'reviewer', mode: 'bg', status: 'done', startedAt: '2026-10-18T10:59:59.000Z' },
+    { id: 'tester-0002', runId: 'r1', worker: 'tester', mode: 'bg', status: 'failed', startedAt: '2026-10-18T13:00:00.000Z' },
+  ];
+  const text = formatStatus(runs, { runsDir: '/p', jobs, now: new Date(STATUS_NOW) });
+  assert.deepEqual(text.split('\n').slice(2), [
+    'codex jobs: 2 (showing 2)',
+    'reviewer-0001  run=r1  worker=reviewer  mode=bg  status=done  age=1s',
+    'tester-0002  run=r1  worker=tester  mode=bg  status=failed  age=0s',
+  ]);
+  assert.equal(formatStatus(runs, { runsDir: '/p' }), formatStatus(runs, { runsDir: '/p', jobs: [] }));
+});

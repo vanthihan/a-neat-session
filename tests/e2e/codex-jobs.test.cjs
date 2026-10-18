@@ -367,3 +367,34 @@ test('no id: result uses the newest job; cancel lists running jobs; --stdin read
     assert.equal(res.stdout, `job ${job} cancelled\n`);
   }
 });
+
+test('result --stdin matches result <job>; a hostile id is refused and runs nothing', () => {
+  const { job } = startReviewer('stdin result');
+  assert.match(waitJob(job).line, /status=done/);
+  const direct = neat(['codex', 'result', job]);
+  assert.equal(direct.status, 0, direct.stderr);
+  const viaStdin = neat(['codex', 'result', '--stdin'], {}, `${job}\n`);
+  assert.deepEqual([viaStdin.status, viaStdin.stdout], [0, direct.stdout]);
+  for (const verb of ['result', 'cancel']) {
+    const evil = neat(['codex', verb, '--stdin'], {}, 'x; touch pwned\n');
+    assert.equal(evil.status, 2, verb);
+    assert.match(evil.stderr, /invalid job id/);
+    assert.equal(fs.existsSync(path.join(proj, 'pwned')), false);
+  }
+});
+
+test('status lists the job through the installed helper; cancel --stdin stops a running one', () => {
+  const { id, job } = startReviewer('status and cancel', { FAKE_CODEX_DELAY_MS: '10000' });
+  try {
+    const shown = neat(['status']);
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.ok(
+      shown.stdout.includes(`${job}  run=${id}  worker=reviewer  mode=bg  status=running  age=0s\n`),
+      shown.stdout,
+    );
+  } finally {
+    const res = neat(['codex', 'cancel', '--stdin'], {}, `${job}\n`);
+    assert.deepEqual([res.status, res.stdout], [0, `job ${job} cancelled\n`]);
+  }
+  assert.ok(neat(['status']).stdout.includes(`${job}  run=${id}  worker=reviewer  mode=bg  status=cancelled  age=0s\n`));
+});
