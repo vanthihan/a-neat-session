@@ -2,6 +2,11 @@
 
 // Codex job records: one JSON file per job under <runDir>/jobs/, written
 // atomically. Job ids are checked against JOB_ID before any path is built.
+// The jobs dir sits inside the workspace a Codex worker may write, so a record
+// is untrusted input: readJob drops a record whose id, run, worker, status,
+// mode, sandbox, pids or tmux target do not fit the file it was read from,
+// and replaces its root and file paths with the ones derived here. The codex
+// binary and exec settings never come from a record (see job-runner).
 // The terminal status is written by exactly one party: whoever first creates
 // the job's `.end` marker (the wrapper, cancel, or a wait that found the job
 // lost), so a cancelled job can never flip back to done or failed.
@@ -11,11 +16,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { UsageError } = require('./cli-args.cjs');
 const runState = require('./run-state.cjs');
+const { SANDBOXES } = require('./codex.cjs');
 
 const JOB_ID = /^[a-z0-9-]{3,64}$/;
 const JOB_STATUSES = Object.freeze(['running', 'done', 'failed', 'cancelled']);
 const TERMINAL = Object.freeze(['done', 'failed', 'cancelled']);
 const ID_HEX_BYTES = 2;
+const ID_SUFFIX = /^[0-9a-f]+$/;
+const MODES = Object.freeze(['bg', 'tmux']);
+const TMUX_WINDOW_ID = /^@\d+$/;
 
 function assertJobId(id) {
   if (typeof id !== 'string' || !JOB_ID.test(id)) throw new UsageError(`invalid job id: ${id}`);
@@ -33,6 +42,15 @@ function jobsDir(root, runId) {
 function jobFile(root, runId, jobId, suffix = '.json') {
   assertJobId(jobId);
   return path.join(jobsDir(root, runId), `${jobId}${suffix}`);
+}
+
+// The files of job `jobId` of `worker`: codex output, job log and prompt.
+function jobPaths(root, runId, jobId, worker) {
+  return {
+    outputPath: path.join(runState.runDir(root, runId), `codex-${worker}.md`),
+    logPath: jobFile(root, runId, jobId, '.log'),
+    promptPath: jobFile(root, runId, jobId, '.prompt.md'),
+  };
 }
 
 // <worker>-<4 hex>, regenerated while a record with that id exists.
@@ -58,13 +76,35 @@ function writeJob(root, record) {
   return record;
 }
 
-// The record, or null when the file is missing or unreadable.
+function isPidField(v) {
+  return v === null || v === undefined || (Number.isInteger(v) && v > 1);
+}
+
+// True when `rec` can be the record of job `jobId` in run `runId`.
+function fitsFile(rec, runId, jobId) {
+  if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return false;
+  if (rec.id !== jobId || rec.runId !== runId) return false;
+  const { worker } = rec;
+  if (typeof worker !== 'string' || !runState.WORKER_NAME.test(worker)) return false;
+  const prefix = `${worker.toLowerCase()}-`;
+  if (!jobId.startsWith(prefix) || !ID_SUFFIX.test(jobId.slice(prefix.length))) return false;
+  if (!JOB_STATUSES.includes(rec.status) || !MODES.includes(rec.mode) || !SANDBOXES.includes(rec.sandbox)) return false;
+  if (!isPidField(rec.pid) || !isPidField(rec.pgid)) return false;
+  const target = rec.tmuxTarget;
+  return target === null || target === undefined || (typeof target === 'string' && TMUX_WINDOW_ID.test(target));
+}
+
+// The record with its root and file paths derived from where it was read, or
+// null when the file is missing, unreadable or does not fit (see fitsFile).
 function readJob(root, runId, jobId) {
+  let rec;
   try {
-    return JSON.parse(fs.readFileSync(jobFile(root, runId, jobId), 'utf8'));
+    rec = JSON.parse(fs.readFileSync(jobFile(root, runId, jobId), 'utf8'));
   } catch {
     return null;
   }
+  if (!fitsFile(rec, runId, jobId)) return null;
+  return { ...rec, root: path.resolve(root), ...jobPaths(root, runId, jobId, rec.worker) };
 }
 
 function runIdsNewestFirst(root) {
@@ -139,17 +179,23 @@ function pidExists(pid) {
   }
 }
 
+// True when `argv` is the job's wrapper: it holds `_exec <run id> <job id>`.
+function isWrapperArgv(argv, record) {
+  return argv.some((a, i) => a === '_exec' && argv[i + 1] === record.runId && argv[i + 2] === record.id);
+}
+
 // kill -0 on the recorded pid (EPERM still means the process exists). Where
-// /proc exists, /proc/<pid>/cmdline must also carry the job id, so
-// a reused pid or a zombie never reads as the job. Only liveness is checked:
-// a terminal status in the record wins over it (see isTerminal).
+// /proc exists, /proc/<pid>/cmdline must also be the job's wrapper command
+// line, so a reused pid, a zombie or another process that merely mentions the
+// job id never reads as the job. Only liveness is checked: a terminal status
+// in the record wins over it (see isTerminal).
 function isAlive(record, { procDir = '/proc' } = {}) {
   if (!record || !Number.isInteger(record.pid) || record.pid <= 1) return false;
   if (!pidExists(record.pid)) return false;
   if (!fs.existsSync(procDir)) return true;
   try {
     const argv = fs.readFileSync(path.join(procDir, String(record.pid), 'cmdline'), 'utf8').split('\0');
-    return argv.includes(record.id);
+    return isWrapperArgv(argv, record);
   } catch {
     return false;
   }
@@ -181,6 +227,7 @@ module.exports = {
   assertJobId,
   jobsDir,
   jobFile,
+  jobPaths,
   makeJobId,
   writeJob,
   readJob,

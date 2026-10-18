@@ -139,6 +139,7 @@ module.exports = {
   SANDBOXES,
   ELIGIBLE_ROLES,
   MODEL,
+  resolveBinary,
   detect,
   availability,
   eligible,

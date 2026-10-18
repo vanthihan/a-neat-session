@@ -272,14 +272,15 @@ function writeJobRecord(proj, runId, record) {
   const dir = path.join(proj, '.neat', 'runs', runId, 'jobs');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${record.id}.json`);
-  fs.writeFileSync(file, `${JSON.stringify({ runId, mode: 'bg', exitCode: null, ...record }, null, 2)}\n`);
+  const full = { runId, mode: 'bg', sandbox: 'read-only', exitCode: null, ...record };
+  fs.writeFileSync(file, `${JSON.stringify(full, null, 2)}\n`);
   return file;
 }
 
-// A live process whose command line carries `jobId`, like a real job wrapper.
-function liveJobProcess(jobId) {
-  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', jobId], { stdio: 'ignore' });
-  return child;
+// A live process with a job wrapper's command line (`codex _exec <run> <job>`).
+function liveJobProcess(runId, jobId) {
+  const args = ['-e', 'setInterval(() => {}, 1000)', 'codex', '_exec', runId, jobId];
+  return spawn(process.execPath, args, { stdio: 'ignore' });
 }
 
 function deadPid() {
@@ -298,7 +299,7 @@ test('status lists Codex jobs newest first with run, worker, mode, status and ag
   withProject((proj, neat) => {
     const older = newRun(neat, 'older task', '2026-10-18T08:00:00Z');
     const newer = newRun(neat, 'newer task', '2026-10-18T10:00:00Z');
-    const live = liveJobProcess('reviewer-aaaa');
+    const live = liveJobProcess(newer, 'reviewer-aaaa');
     try {
       writeJobRecord(proj, older, {
         id: 'implementer-t1-0b0b', worker: 'implementer-T1', status: 'done', pid: deadPid(),

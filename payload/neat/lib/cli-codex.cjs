@@ -164,7 +164,7 @@ function cmdExec(args, io) {
   if (!ok) throw new UsageError('usage: neat codex _exec <run-id> <job-id> [--tee]');
   if (!runState.isValidRunId(runId)) throw new UsageError(`invalid run id: ${runId}`);
   jobs.assertJobId(jobId);
-  return runner.runWrapper(rootOf(io), runId, jobId, { tee: flag === '--tee' });
+  return runner.runWrapper(rootOf(io), runId, jobId, { tee: flag === '--tee', env: io.env });
 }
 
 const VERBS = Object.freeze({

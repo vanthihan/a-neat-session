@@ -9,6 +9,8 @@ const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const { once } = require('node:events');
+const { spawn } = require('node:child_process');
 const {
   REPO_ROOT, childEnv, runNode, makeTempDir, removeDir, installFakeCodex,
 } = require('../support/helpers.cjs');
@@ -355,6 +357,40 @@ test('cancel on a finished job sends nothing', () => {
   assert.match(waitJob(job).line, /status=done/);
   const res = neat(['codex', 'cancel', job]);
   assert.deepEqual([res.status, res.stdout], [0, `job ${job} already done\n`]);
+});
+
+test('the wrapper runs the codex its launcher named, never codexPath, root or paths from the record', async () => {
+  fs.rmSync(log, { force: true });
+  const { id, dir } = newRun('tampered record');
+  briefLine(id, 'reviewer');
+  const job = 'reviewer-e1e1';
+  const jobsDir = path.join(dir, 'jobs');
+  fs.mkdirSync(jobsDir, { recursive: true });
+  fs.writeFileSync(path.join(jobsDir, `${job}.prompt.md`), '# Brief: reviewer\n');
+  const mark = path.join(binDir, 'evil-ran');
+  const evil = path.join(binDir, 'evil');
+  fs.writeFileSync(evil, `#!/bin/sh\necho ran > '${mark}'\n`, { mode: 0o755 });
+  const exec = JSON.stringify({ bin: shim, sandbox: 'read-only', effort: 'none', model: null });
+  const child = spawn(process.execPath, [helper, 'codex', '_exec', id, job], {
+    cwd: proj, env: { ...env, NEAT_JOB_EXEC: exec }, stdio: 'ignore',
+  });
+  await once(child, 'spawn');
+  const elsewhere = path.join(binDir, 'elsewhere.md');
+  fs.writeFileSync(path.join(jobsDir, `${job}.json`), JSON.stringify({
+    id: job, runId: id, worker: 'reviewer', mode: 'bg', sandbox: 'read-only', effort: 'none', model: null,
+    codexPath: evil, tmuxTarget: null, root: binDir, outputPath: elsewhere, logPath: elsewhere, promptPath: elsewhere,
+    pid: child.pid, pgid: child.pid, status: 'running', startedAt: NOW_ISO, endedAt: null, exitCode: null,
+  }));
+  const [code] = await once(child, 'exit');
+  assert.equal(code, 0);
+  assert.equal(fs.existsSync(mark), false, 'the record\'s codexPath must never run');
+  const call = calls().find((c) => c.argv[0] === 'exec');
+  assert.ok(call, 'the launcher-named codex must run');
+  assert.equal(call.argv[call.argv.indexOf('-C') + 1], proj);
+  assert.equal(call.argv[call.argv.indexOf('-o') + 1], path.join(dir, 'codex-reviewer.md'));
+  assert.equal(call.stdin.split('\n')[0], '# Brief: reviewer');
+  assert.equal(fs.existsSync(elsewhere), false);
+  assert.equal(readJson(path.join(jobsDir, `${job}.json`)).status, 'done');
 });
 
 test('a failed login shows error lines and a hint, never the prompt', () => {

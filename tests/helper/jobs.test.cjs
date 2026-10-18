@@ -31,7 +31,7 @@ after(() => removeDir(root));
 function record(runId, id, extra = {}) {
   const jobsDir = path.join(root, '.neat', 'runs', runId, 'jobs');
   return {
-    id, runId, worker: 'reviewer', pid: null, pgid: null, status: 'running', exitCode: null,
+    id, runId, worker: 'reviewer', mode: 'bg', sandbox: 'read-only', pid: null, pgid: null, status: 'running', exitCode: null,
     outputPath: path.join(root, '.neat', 'runs', runId, 'codex-reviewer.md'),
     logPath: path.join(jobsDir, `${id}.log`),
     promptPath: path.join(jobsDir, `${id}.prompt.md`),
@@ -69,6 +69,75 @@ describe('ids and lookup', () => {
   });
 });
 
+describe('records are untrusted input', () => {
+  function rawWrite(runId, fileId, rec) {
+    const dir = path.join(root, '.neat', 'runs', runId, 'jobs');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${fileId}.json`), JSON.stringify(rec));
+  }
+
+  test('a record that does not fit its file is dropped', () => {
+    const cases = [
+      ['reviewer-0001', { id: 'reviewer-0002' }],
+      ['reviewer-0003', { runId: RUN_B }],
+      ['reviewer-0004', { worker: 'tester' }],
+      ['reviewer-0005', { worker: 'root' }],
+      ['reviewer-0006', { status: 'running; rm' }],
+      ['reviewer-0007', { mode: 'shell' }],
+      ['reviewer-0008', { sandbox: 'danger-full-access' }],
+      ['reviewer-0009', { pid: '123' }],
+      ['reviewer-000a', { pgid: 1 }],
+      ['reviewer-000b', { tmuxTarget: 'keep:2' }],
+      ['reviewer-000c', { tmuxTarget: '@1; kill-server' }],
+    ];
+    for (const [fileId, patch] of cases) {
+      rawWrite(RUN_A, fileId, { ...record(RUN_A, fileId), ...patch });
+      assert.equal(jobs.readJob(root, RUN_A, fileId), null, JSON.stringify(patch));
+    }
+    rawWrite(RUN_A, 'reviewer-000d', [1, 2]);
+    assert.equal(jobs.readJob(root, RUN_A, 'reviewer-000d'), null);
+    rawWrite(RUN_A, 'reviewer-000e', { ...record(RUN_A, 'reviewer-000e'), tmuxTarget: '@12', pid: 4242, pgid: 4242 });
+    assert.equal(jobs.readJob(root, RUN_A, 'reviewer-000e').tmuxTarget, '@12');
+  });
+
+  test('root and file paths always come from where the record was read', () => {
+    const secret = path.join(root, 'secret.txt');
+    fs.writeFileSync(secret, 'TOP SECRET');
+    rawWrite(RUN_A, 'reviewer-5ec7', {
+      ...record(RUN_A, 'reviewer-5ec7'), status: 'done', exitCode: 0, root: '/',
+      outputPath: secret, logPath: secret, promptPath: secret,
+    });
+    const rec = jobs.readJob(root, RUN_A, 'reviewer-5ec7');
+    const runDir = path.join(root, '.neat', 'runs', RUN_A);
+    assert.equal(rec.root, path.resolve(root));
+    assert.equal(rec.outputPath, path.join(runDir, 'codex-reviewer.md'));
+    assert.equal(rec.logPath, path.join(runDir, 'jobs', 'reviewer-5ec7.log'));
+    assert.equal(rec.promptPath, path.join(runDir, 'jobs', 'reviewer-5ec7.prompt.md'));
+    const built = codexResult.buildResult({ ...rec, status: 'failed', exitCode: 1 }, {
+      logText: codexResult.readCapped(rec.logPath) || '', promptText: '',
+    });
+    assert.ok(!built.text.includes('TOP SECRET'));
+  });
+
+  test('cancel never signals a process that only mentions the job id', async () => {
+    const runner = require(path.join(LIB, 'job-runner.cjs'));
+    const decoy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', 'reviewer-dec0'], {
+      stdio: 'ignore', detached: true,
+    });
+    try {
+      await new Promise((resolve) => decoy.once('spawn', resolve));
+      jobs.writeJob(root, record(RUN_B, 'reviewer-dec0', { pid: decoy.pid, pgid: decoy.pid }));
+      const res = await runner.cancelJob(root, 'reviewer-dec0', { graceMs: 200 });
+      assert.equal(res.cancelled, true);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      assert.equal(decoy.exitCode, null, 'the decoy must still run');
+      assert.equal(decoy.signalCode, null);
+    } finally {
+      decoy.kill('SIGKILL');
+    }
+  });
+});
+
 describe('isAlive', () => {
   let child;
 
@@ -87,10 +156,20 @@ describe('isAlive', () => {
     assert.equal(jobs.isAlive(r, { procDir: path.join(root, 'no-proc') }), true, 'without /proc only kill -0 decides');
   });
 
-  test('a live pid whose cmdline carries the job id is alive', async () => {
-    child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)', 'reviewer-live'], { stdio: 'ignore' });
+  test('a live pid whose cmdline is the job wrapper is alive', async () => {
+    const args = ['-e', 'setTimeout(() => {}, 20000)', 'codex', '_exec', RUN_A, 'reviewer-11ee'];
+    child = spawn(process.execPath, args, { stdio: 'ignore' });
     await new Promise((resolve) => child.once('spawn', resolve));
-    assert.equal(jobs.isAlive(record(RUN_A, 'reviewer-live', { pid: child.pid })), true);
+    assert.equal(jobs.isAlive(record(RUN_A, 'reviewer-11ee', { pid: child.pid })), true);
+    assert.equal(jobs.isAlive(record(RUN_B, 'reviewer-11ee', { pid: child.pid })), false, 'another run');
+    child.kill('SIGKILL');
+  });
+
+  test('a live pid whose cmdline only mentions the job id is not the job', async () => {
+    if (!fs.existsSync('/proc/self/cmdline')) return;
+    child = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 20000)', 'reviewer-22ee'], { stdio: 'ignore' });
+    await new Promise((resolve) => child.once('spawn', resolve));
+    assert.equal(jobs.isAlive(record(RUN_A, 'reviewer-22ee', { pid: child.pid })), false);
     child.kill('SIGKILL');
   });
 });

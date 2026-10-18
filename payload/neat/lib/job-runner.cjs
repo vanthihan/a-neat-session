@@ -7,7 +7,9 @@
 // directly and makes it a session leader). The wrapper pipes the prompt file
 // to `codex exec ... -` and records the outcome. No shell is involved
 // anywhere: every process starts from an argv array and the prompt travels
-// on stdin.
+// on stdin. The codex binary and exec settings reach the wrapper through
+// its environment (NEAT_JOB_EXEC, set here at launch), never through the job
+// record, which lives where a Codex worker can write.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -30,6 +32,7 @@ const TMUX_TIMEOUT_MS = 10000;
 const TMUX_FORMAT = '#{window_id} #{pane_pid}';
 const TMUX_WINDOW_ID = /^@\d+$/;
 const NO_TMUX_NOTE = 'note: tmux not found; running in the background';
+const EXEC_ENV = 'NEAT_JOB_EXEC';
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -73,10 +76,31 @@ function jobPlan(root, state, worker, { env, sandbox }) {
   return { role, briefPath, codexPath, sandbox: chosen, effort: entry.effort || 'none', model: cfg.codex.model };
 }
 
-function execArgs(record, root) {
+// settings: { sandbox, effort, model }; outputPath from the (derived) record paths.
+function execArgs(settings, root, outputPath) {
   return codex.buildExecArgs({
-    sandbox: record.sandbox, root, effort: record.effort, model: record.model, outputPath: record.outputPath,
+    sandbox: settings.sandbox, root, effort: settings.effort, model: settings.model, outputPath,
   });
+}
+
+// The NEAT_JOB_EXEC value the launcher hands the wrapper.
+function execEnvValue(plan) {
+  return JSON.stringify({ bin: plan.codexPath, sandbox: plan.sandbox, effort: plan.effort, model: plan.model || null });
+}
+
+// { bin, sandbox, effort, model } from the wrapper's NEAT_JOB_EXEC, or null
+// when it is missing or the binary is not an absolute executable file.
+function execSettings(env) {
+  let v;
+  try {
+    v = JSON.parse(env[EXEC_ENV] || '');
+  } catch {
+    return null;
+  }
+  if (!v || typeof v !== 'object') return null;
+  const bin = codex.resolveBinary({ NEAT_CODEX_BIN: typeof v.bin === 'string' ? v.bin : '' });
+  if (!bin) return null;
+  return { bin, sandbox: v.sandbox, effort: v.effort, model: v.model || null };
 }
 
 function writePrompt(file, briefPath, role) {
@@ -85,12 +109,12 @@ function writePrompt(file, briefPath, role) {
   fs.writeFileSync(file, text, { mode: PRIVATE_MODE });
 }
 
-function spawnWrapper(root, runId, jobId, env) {
+function spawnWrapper(root, runId, jobId, env, execValue) {
   const child = spawn(process.execPath, [helperPath(), 'codex', '_exec', runId, jobId], {
     cwd: root,
     detached: true,
     stdio: 'ignore',
-    env: { ...env, NEAT_PROJECT_DIR: root },
+    env: { ...env, NEAT_PROJECT_DIR: root, [EXEC_ENV]: execValue },
   });
   if (!child.pid) throw new Error('could not start the codex job');
   child.unref();
@@ -116,11 +140,11 @@ function tmuxAvailable(env) {
 // directory: tmux expands formats in it, and `#(...)` in a project path would
 // run a shell command. The wrapper gets the root from NEAT_PROJECT_DIR (`-e`
 // values and the command argv are passed verbatim). Returns { pid, target, attach }.
-function startTmux(root, runId, jobId, env) {
+function startTmux(root, runId, jobId, env, execValue) {
   const session = `neat-${runId}`;
   const window = ['-n', `neat-${jobId}`];
   const tail = [
-    '-e', `NEAT_PROJECT_DIR=${root}`, '-P', '-F', TMUX_FORMAT,
+    '-e', `NEAT_PROJECT_DIR=${root}`, '-e', `${EXEC_ENV}=${execValue}`, '-P', '-F', TMUX_FORMAT,
     '--', process.execPath, helperPath(), 'codex', '_exec', runId, jobId, '--tee',
   ];
   const inside = Boolean(env.TMUX);
@@ -163,17 +187,15 @@ function startJob(root, {
   const id = jobs.makeJobId(root, runId, worker);
   const base = {
     id, runId, worker, mode: launch.mode, sandbox: plan.sandbox, effort: plan.effort, model: plan.model,
-    codexPath: plan.codexPath, tmuxTarget: null, root,
-    outputPath: path.join(dir, `codex-${worker}.md`),
-    logPath: jobs.jobFile(root, runId, id, '.log'),
-    promptPath: jobs.jobFile(root, runId, id, '.prompt.md'),
+    codexPath: plan.codexPath, tmuxTarget: null, root, ...jobs.jobPaths(root, runId, id, worker),
   };
-  execArgs(base, root); // invalid sandbox/effort/model: stop before any write
+  execArgs(plan, root, base.outputPath); // invalid sandbox/effort/model: stop before any write
+  const execValue = execEnvValue(plan);
   fs.rmSync(base.outputPath, { force: true });
   writePrompt(base.promptPath, plan.briefPath, plan.role);
   const started = launch.mode === 'tmux'
-    ? startTmux(root, runId, id, env)
-    : { pid: spawnWrapper(root, runId, id, env), target: null, attach: null };
+    ? startTmux(root, runId, id, env, execValue)
+    : { pid: spawnWrapper(root, runId, id, env, execValue), target: null, attach: null };
   const record = jobs.writeJob(root, {
     ...base, tmuxTarget: started.target, pid: started.pid, pgid: started.pid,
     status: 'running', startedAt: now.toISOString(), endedAt: null, exitCode: null,
@@ -211,12 +233,13 @@ function teeTo(stream, logFd) {
   });
 }
 
-function runCodex(root, record, logFd, tee) {
+function runCodex(root, record, settings, logFd, tee) {
   return new Promise((resolve) => {
     let child;
     const out = tee ? 'pipe' : logFd;
     try {
-      child = spawn(record.codexPath, execArgs(record, root), { cwd: root, stdio: ['pipe', out, out] });
+      if (!settings) throw new Error('no codex exec settings');
+      child = spawn(settings.bin, execArgs(settings, root, record.outputPath), { cwd: root, stdio: ['pipe', out, out] });
     } catch {
       resolve(null);
       return;
@@ -234,17 +257,17 @@ function runCodex(root, record, logFd, tee) {
 
 // Body of `codex _exec`: runs codex for the job and records the outcome
 // unless someone else (cancel) already ended the job. `tee` also shows the
-// output on stdout (tmux mode). The project root comes from the record,
-// because a tmux pane has the tmux server's environment, not the caller's.
-async function runWrapper(root, runId, jobId, { tee = false } = {}) {
+// output on stdout (tmux mode). The project root and the codex settings come
+// from the environment the launcher gave this process (NEAT_PROJECT_DIR,
+// NEAT_JOB_EXEC), not from the record.
+async function runWrapper(root, runId, jobId, { tee = false, env = process.env } = {}) {
   const record = await ownRecord(root, runId, jobId);
   if (!record) return 1;
-  const jobRoot = record.root || root;
   process.stdout.on('error', () => {});
   const logFd = fs.openSync(record.logPath, 'a', PRIVATE_MODE);
   let code;
   try {
-    code = await runCodex(jobRoot, record, logFd, tee);
+    code = await runCodex(root, record, execSettings(env), logFd, tee);
   } finally {
     fs.closeSync(logFd);
   }
