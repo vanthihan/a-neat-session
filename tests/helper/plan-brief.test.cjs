@@ -599,6 +599,17 @@ test('brief --fix appends only the task\'s merged critical and warning lines as 
   assert.match(t3text, /## Review findings to fix\n.*\nb\.js:5 warning \[claude\] error from the parser is swallowed\n$/);
 });
 
+test('brief --fix drops the review fix-round guard records, so each fix round needs its own Guard', () => {
+  const { id, dir } = fixRun('fix guard reset', `${FIX_REVIEW}\n`);
+  const file = path.join(dir, 'state.json');
+  const state = readState(dir);
+  fs.writeFileSync(file, JSON.stringify({ ...state, guarded: ['explore', 'implement:T1', 'review', 'review:T1,T3'] }));
+  const res = neat(['brief', id, 'implementer-T1', '--fix']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(readState(dir).guarded, ['explore', 'implement:T1', 'review']);
+  assert.equal(readState(dir).review.inputs, null);
+});
+
 test('brief --fix combines with --stdin in either order, findings after the notes', () => {
   const { id } = fixRun('fix with notes', `${FIX_REVIEW}\n`);
   for (const args of [['--fix', '--stdin'], ['--stdin', '--fix']]) {

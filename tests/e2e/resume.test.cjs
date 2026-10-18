@@ -328,6 +328,45 @@ describe('run resume and procedure through the installed helper', () => {
     assert.ok(resumed.includes(`next: Approve - run plan show ${id} and ask for approval again`), resumed);
   });
 
+  test('during a review fix round resume names the fix workers, then their Guard, then a new review round', () => {
+    const id = newRun('fix round resume', NOW);
+    const dir = path.join(proj, '.neat', 'runs', id);
+    const ok = (args, input) => {
+      const res = helperRun(args, { input });
+      assert.equal(res.status, 0, `${args.join(' ')}: ${res.stdout}${res.stderr}`);
+      return res;
+    };
+    const next = () => /^next: (.*)$/m.exec(ok(['run', 'resume', id]).stdout)[1];
+    ok(['stages', id, '--type', 'feature']);
+    const plan = [
+      '## T1: add hello', 'worker: implementer', 'owns: src/hello.js', 'do: add it',
+      '## D1: document hello', 'worker: docs', 'owns: README.md', 'do: describe it', '',
+    ];
+    ok(['write', id, 'plan.md', '--stdin'], plan.join('\n'));
+    ok(['plan', 'check', id]);
+    ok(['run', 'stage', id, 'review']);
+    for (const w of ['reviewer', 'reviewer-2']) {
+      ok(['brief', id, w]);
+      ok(['write', id, `report-${w}.md`, '--stdin'], VALID_REPORT);
+      ok(['run', 'worker', id, w, 'done']);
+    }
+    fs.writeFileSync(path.join(dir, 'review.md'), 'src/hello.js:3 - high - unchecked input reaches the query\n');
+    assert.match(ok(['review', 'merge', id]).stdout, /next=fix/);
+    const G = 'G = --tasks T1';
+    const launch = `Review - guide review step 3 fix round: run brief ${id} <w> --fix for each of implementer-T1, `
+      + `then the Worker loop skipping its Brief step with W = implementer-T1 and ${G}`;
+    assert.equal(next(), launch);
+    ok(['brief', id, 'implementer-T1', '--fix']);
+    assert.equal(next(), launch);
+    ok(['write', id, 'report-implementer-T1.md', '--stdin'], VALID_REPORT);
+    assert.equal(next(), `Review - guide review step 3 fix round: Worker loop step 4 (Check) with W = implementer-T1 and ${G}`);
+    ok(['run', 'worker', id, 'implementer-T1', 'done']);
+    assert.equal(next(), `Review - guide review step 3 fix round: Worker loop step 5 (Guard) with ${G}`);
+    ok(['run', 'guard', id, '--tasks', 'T1']);
+    assert.equal(next(), 'Review - guide review from step 1');
+    ok(['run', 'stage', id, 'cancelled']);
+  });
+
   test('a finished run prints nothing to resume and no procedure line', () => {
     const id = newRun('done already', NOW);
     assert.equal(helperRun(['run', 'stage', id, 'done']).status, 0);

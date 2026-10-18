@@ -200,9 +200,16 @@ function writeBrief(root, id, worker, notes, now, env = process.env, { fix = fal
   const report = path.join(runDir, `report-${worker}.md`);
   const extra = { model: route.model, effort: route.effort };
   // A fix pass clears the review inputs so the next merge always counts the
-  // round, even when the reviewers write byte-identical files again.
+  // round, even when the reviewers write byte-identical files again. It also
+  // drops the guard records of earlier fix rounds (`review:<tasks>`), so a
+  // resume knows whether this round's Guard step passed.
   runState.updateRun(root, id, (fresh) => {
-    const base = fix ? { ...fresh, review: { ...fresh.review, inputs: null } } : fresh;
+    const guardedList = Array.isArray(fresh.guarded) ? fresh.guarded : [];
+    const base = fix ? {
+      ...fresh,
+      review: { ...fresh.review, inputs: null },
+      guarded: guardedList.filter((k) => !String(k).startsWith('review:')),
+    } : fresh;
     return runState.setWorker(base, worker, 'running', report, extra);
   }, now);
   return { file, route };

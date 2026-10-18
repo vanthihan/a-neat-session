@@ -39,6 +39,7 @@ const SINGLE_WORKER = Object.freeze({ research: 'researcher', test: 'tester' });
 const WORD = /^[a-z][a-z-]{0,31}$/;
 const MAX_TASK_TEXT = 2000;
 const MAX_REPORT_READ = 64 * 1024;
+const MERGED_FILE = 'review-merged.md';
 // ANSI escape sequences and control characters, removed from the task text.
 const UNSAFE_TEXT = /\u001b(?:\[[0-?]*[ -/]*[@-~]|[@-_])|[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 
@@ -164,6 +165,51 @@ const REVIEWERS = Object.freeze(['reviewer', 'reviewer-2']);
 // Worker statuses set by the Check step.
 const CHECKED = Object.freeze(['done', 'failed', 'report-invalid']);
 
+// The plan worker that fixes task `taskId` (D<n> -> docs-D<n>, else implementer-T<n>).
+function fixWorker(taskId) {
+  return `${taskId.startsWith('D') ? 'docs' : 'implementer'}-${taskId}`;
+}
+
+// The fix workers to launch (brief --fix, then the Worker loop) and to check.
+function fixLaunch(id, launch, check, g) {
+  const order = launch.length > 1 ? '; tasks that share a plan batch run together, later batches after' : '';
+  const run = `run brief ${id} <w> --fix for each of ${launch.join(' ')}, then the Worker loop skipping its Brief step `
+    + `with W = ${launch.join(' ')} and ${g}${order}`;
+  if (check.length === 0) return run;
+  return `Worker loop step 4 (Check) for ${check.join(' ')}; then ${run}`;
+}
+
+// The fix round that the last review merge started (guide review step 3,
+// next=fix), while no reviewer has a brief newer than that merge. null when
+// there is no such round. A fix brief marks the round as started: it is newer
+// than review-merged.md and clears review.inputs. The round's Guard step
+// counts only when it passed after those briefs (brief --fix drops the older
+// review guard records).
+function fixRoundStep(state, facts, review, merge) {
+  const since = facts.briefedSinceMerge;
+  const taskIds = review && Array.isArray(review.fixTasks) ? review.fixTasks.filter((t) => TASK_ID.test(t)) : [];
+  if (!Array.isArray(since) || taskIds.length === 0 || REVIEWERS.some((w) => since.includes(w))) return null;
+  const { id } = state;
+  const g = `G = --tasks ${taskIds.join(',')}`;
+  const workers = taskIds.map(fixWorker);
+  const briefed = workers.filter((w) => since.includes(w));
+  const fixStep = (line) => step('Review', `guide review step 3 fix round: ${line}`);
+  if (briefed.length === 0 && review.inputs !== null) {
+    // The merge's next= is fix only while rounds are left; otherwise the
+    // user's decision (or an auto stop) is not on disk, so merge again.
+    if (!(Number(review.fixRounds) < Number(review.maxRounds))) return merge;
+    return fixStep(fixLaunch(id, workers, [], g));
+  }
+  const open = workers.filter((w) => !(briefed.includes(w) && workerStatus(state, w) === 'done'));
+  if (open.length === 0) {
+    return guarded(state, 'review', taskIds) ? step('Review', 'guide review from step 1') : fixStep(`Worker loop step 5 (Guard) with ${g}`);
+  }
+  const check = open.filter((w) => briefed.includes(w) && hasReport(facts, w));
+  const launch = open.filter((w) => !check.includes(w));
+  if (launch.length === 0) return fixStep(`Worker loop step 4 (Check) with W = ${check.join(' ')} and ${g}`);
+  return fixStep(fixLaunch(id, launch, check, g));
+}
+
 function reviewStep(state, facts) {
   const review = state.review && typeof state.review === 'object' ? state.review : null;
   const reviewersDone = REVIEWERS.every((w) => workerStatus(state, w) === 'done');
@@ -174,6 +220,8 @@ function reviewStep(state, facts) {
     // auto run); that decision is not kept on disk, so merge again to get it.
     return Number(review.unownedCritical) > 0 ? merge : advance(state, 'review');
   }
+  const fixes = fixRoundStep(state, facts, review, merge);
+  if (fixes) return fixes;
   if (REVIEWERS.every((w) => hasReport(facts, w))) {
     // The merge counts only checked reviewers; unchecked ones would read as
     // "no reviewer finished" and stop an auto run.
@@ -325,11 +373,28 @@ function isCurrentReport(dir, name) {
   return briefTime === null || (reportTime !== null && reportTime >= briefTime);
 }
 
+// Workers whose brief is not older than review-merged.md (briefed after the
+// last review merge), sorted; null when the run has no merge yet.
+function briefedSinceMerge(dir, files) {
+  const merged = mtimeMs(path.join(dir, MERGED_FILE));
+  if (merged === null) return null;
+  return files.filter((n) => /^brief-[a-z0-9-]+\.md$/i.test(n))
+    .map((n) => n.slice('brief-'.length, -'.md'.length))
+    .filter((w) => runState.WORKER_NAME.test(w))
+    .filter((w) => {
+      const t = mtimeMs(path.join(dir, `brief-${w}.md`));
+      return t !== null && t >= merged;
+    })
+    .sort();
+}
+
 // Disk facts nextStep needs: this round's report file names, each report's
-// status word (by worker), running Codex jobs, helper path.
+// status word (by worker), the workers briefed since the last review merge,
+// running Codex jobs, helper path.
 function runFacts(root, state) {
   const dir = runState.runDir(root, state.id);
-  const reports = runFiles(root, state.id)
+  const files = runFiles(root, state.id);
+  const reports = files
     .filter((n) => /^report-[a-z0-9-]+\.md$/i.test(n) && isCurrentReport(dir, n))
     .sort();
   const statuses = {};
@@ -337,7 +402,13 @@ function runFacts(root, state) {
     const worker = name.slice('report-'.length, -'.md'.length);
     if (runState.WORKER_NAME.test(worker)) statuses[worker] = fileStatus(path.join(dir, name)) || 'invalid';
   }
-  return { reports, statuses, runningJobs: runningJobIds(root, state.id), helper: HELPER };
+  return {
+    reports,
+    statuses,
+    briefedSinceMerge: briefedSinceMerge(dir, files),
+    runningJobs: runningJobIds(root, state.id),
+    helper: HELPER,
+  };
 }
 
 module.exports = { SECTIONS, nextStep, formatNext, runFacts, resumeLines, safeWord, taskText };

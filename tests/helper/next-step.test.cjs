@@ -198,6 +198,80 @@ describe('nextStep', () => {
     assert.equal(nextStep(clean, reports).section, 'Test');
   });
 
+  describe('review: a pending fix round resumes at its fixes, not at a new review', () => {
+    const reviewers = { reviewer: 'done', 'reviewer-2': 'done' };
+    const both = ['report-reviewer-2.md', 'report-reviewer.md'];
+    const G = 'G = --tasks T1,D1';
+    const merged = { fixTasks: ['T1', 'D1'], fixRounds: 0, maxRounds: 2, inputs: 'abc' };
+    const fixState = (review, workers = {}, extra = {}) => makeState({
+      stage: 'review', workers: { ...reviewers, 'implementer-T1': 'done', 'docs-D1': 'done', ...workers },
+      extra: { review, ...extra },
+    });
+    const withSince = (since, reports = both) => ({ ...facts(reports), briefedSinceMerge: since });
+
+    test('merged with rounds left and no fix brief yet -> brief --fix for each owner', () => {
+      for (const mode of ['gate', 'auto', 'step']) {
+        const state = { ...fixState(merged), mode };
+        assert.deepEqual(nextStep(state, withSince([])), {
+          section: 'Review',
+          line: `guide review step 3 fix round: run brief ${ID} <w> --fix for each of implementer-T1 docs-D1, `
+            + `then the Worker loop skipping its Brief step with W = implementer-T1 docs-D1 and ${G}; `
+            + 'tasks that share a plan batch run together, later batches after',
+        }, mode);
+      }
+    });
+
+    test('merged with no rounds left and no fix brief yet -> merge again for the decision', () => {
+      const state = fixState({ ...merged, fixRounds: 2 });
+      assert.deepEqual(nextStep(state, withSince([])), { section: 'Review', line: `guide review step 3 (review merge ${ID})` });
+    });
+
+    test('fix briefs written: launch the ones without a report, check the ones with one', () => {
+      const started = { ...merged, inputs: null };
+      const running = fixState(started, { 'implementer-T1': 'running', 'docs-D1': 'running' });
+      assert.deepEqual(nextStep(running, withSince(['implementer-T1', 'docs-D1'])), {
+        section: 'Review',
+        line: `guide review step 3 fix round: run brief ${ID} <w> --fix for each of implementer-T1 docs-D1, `
+          + `then the Worker loop skipping its Brief step with W = implementer-T1 docs-D1 and ${G}; `
+          + 'tasks that share a plan batch run together, later batches after',
+      });
+      const oneReport = withSince(['implementer-T1', 'docs-D1'], [...both, 'report-implementer-T1.md']);
+      assert.deepEqual(nextStep(running, oneReport), {
+        section: 'Review',
+        line: 'guide review step 3 fix round: Worker loop step 4 (Check) for implementer-T1; '
+          + `then run brief ${ID} <w> --fix for each of docs-D1, then the Worker loop skipping its Brief step with W = docs-D1 and ${G}`,
+      });
+      const reports = withSince(['implementer-T1', 'docs-D1'], [...both, 'report-docs-D1.md', 'report-implementer-T1.md']);
+      assert.deepEqual(nextStep(running, reports), {
+        section: 'Review', line: `guide review step 3 fix round: Worker loop step 4 (Check) with W = implementer-T1 docs-D1 and ${G}`,
+      });
+      const onlyT1 = fixState(started, { 'implementer-T1': 'running' });
+      assert.equal(nextStep(onlyT1, withSince(['implementer-T1'])).line,
+        `guide review step 3 fix round: run brief ${ID} <w> --fix for each of implementer-T1 docs-D1, `
+          + `then the Worker loop skipping its Brief step with W = implementer-T1 docs-D1 and ${G}; `
+          + 'tasks that share a plan batch run together, later batches after');
+    });
+
+    test('fixes done -> their Guard step, then a new review round from step 1', () => {
+      const since = withSince(['implementer-T1', 'docs-D1']);
+      const done = fixState({ ...merged, inputs: null });
+      assert.deepEqual(nextStep(done, since), { section: 'Review', line: `guide review step 3 fix round: Worker loop step 5 (Guard) with ${G}` });
+      const guardedState = fixState({ ...merged, inputs: null }, {}, { guarded: ['review:D1,T1'] });
+      assert.deepEqual(nextStep(guardedState, since), { section: 'Review', line: 'guide review from step 1' });
+    });
+
+    test('a reviewer briefed since the merge means a new review round: no fix round', () => {
+      const state = fixState(merged, { reviewer: 'running' });
+      assert.deepEqual(nextStep(state, withSince(['reviewer'], ['report-reviewer-2.md'])), {
+        section: 'Review', line: 'guide review from step 1',
+      });
+      const checked = fixState(merged);
+      assert.deepEqual(nextStep(checked, withSince(['reviewer', 'reviewer-2'])), {
+        section: 'Review', line: `guide review step 3 (review merge ${ID})`,
+      });
+    });
+  });
+
   test('test: done -> next stage; report -> Check; else Test', () => {
     assert.equal(nextStep(makeState({ stage: 'test', workers: { tester: 'done' }, extra: { guarded: ['test'] } }), facts()).section, 'Docs');
     assert.deepEqual(nextStep(makeState({ stage: 'test', workers: { tester: 'running' } }), facts(['report-tester.md'])), {
@@ -331,6 +405,39 @@ describe('runFacts', () => {
       assert.deepEqual(runFacts(root, state).reports, ['report-reviewer-2.md']);
       const review = { ...state, stage: 'review', workers: [{ name: 'reviewer', status: 'running' }, { name: 'reviewer-2', status: 'running' }] };
       assert.equal(nextStep(review, runFacts(root, review)).line, 'guide review from step 1');
+    } finally {
+      removeDir(root);
+    }
+  });
+
+  test('names the workers briefed since the last review merge; null before any merge', () => {
+    const root = makeTempDir('neat-next-');
+    try {
+      const state = rs.createRun(root, { task: 'facts', mode: 'gate' }, new Date('2026-10-18T12:00:00Z'));
+      const dir = rs.runDir(root, state.id);
+      const at = (name, sec) => {
+        fs.writeFileSync(path.join(dir, name), 'x');
+        fs.utimesSync(path.join(dir, name), sec, sec);
+      };
+      at('brief-implementer-T1.md', 500);
+      at('brief-reviewer.md', 1000);
+      at('brief-reviewer-2.md', 1000);
+      at('report-reviewer.md', 1500);
+      at('report-reviewer-2.md', 1500);
+      assert.equal(runFacts(root, state).briefedSinceMerge, null);
+      at('review-merged.md', 2000);
+      assert.deepEqual(runFacts(root, state).briefedSinceMerge, []);
+      at('brief-implementer-T1.md', 2500);
+      at('brief-not-a-worker.md', 2500);
+      const review = {
+        ...state,
+        stage: 'review',
+        workers: [{ name: 'reviewer', status: 'done' }, { name: 'reviewer-2', status: 'done' }, { name: 'implementer-T1', status: 'running' }],
+        review: { fixTasks: ['T1'], fixRounds: 0, maxRounds: 2, inputs: null },
+      };
+      const f = runFacts(root, review);
+      assert.deepEqual(f.briefedSinceMerge, ['implementer-T1']);
+      assert.ok(nextStep(review, f).line.includes('--fix for each of implementer-T1,'), nextStep(review, f).line);
     } finally {
       removeDir(root);
     }
