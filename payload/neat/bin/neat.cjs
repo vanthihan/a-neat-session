@@ -138,7 +138,9 @@ function cmdRunStage(args) {
     runState.saveRun(root, runState.setStage(state, stage), runState.currentTime(process.env));
     out(`stage ${stage}`);
   }
-  outIf(contextLineFor(contextArgs(root, state)));
+  // A finished or cancelled run has no next step to stop before, and the
+  // line would replace the Finish summary with a pointer to /neat:resume.
+  if (!runState.TERMINAL_STAGES.includes(stage)) outIf(contextLineFor(contextArgs(root, state)));
   return 0;
 }
 

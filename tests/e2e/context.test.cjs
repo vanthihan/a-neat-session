@@ -129,3 +129,15 @@ test('project thresholds move the line; run stage skipped also carries it', () =
     fs.rmSync(file);
   }
 });
+
+test('done and cancelled print no context line, even at critical', () => {
+  for (const pct of [63, 78]) {
+    const env = caseEnv({ pct });
+    const finished = newRun(env);
+    neat(['run', 'stage', finished, 'explore'], env);
+    assert.deepEqual(neat(['run', 'stage', finished, 'done'], env), ['stage done']);
+    const cancelled = newRun(env);
+    neat(['run', 'stage', cancelled, 'explore'], env);
+    assert.deepEqual(neat(['run', 'stage', cancelled, 'cancelled'], env), ['stage cancelled']);
+  }
+});

@@ -415,8 +415,9 @@ report, brief or plan text.
 
 ### Context warnings
 
-`neat brief`, `neat run stage` and `neat route` print a `context:` line when
-this session's context window reaches `context.warn` (default 60%). At
+`neat brief`, `neat run stage` (except for `done` and `cancelled`) and
+`neat route` print a `context:` line when this session's context window
+reaches `context.warn` (default 60%). At
 `context.critical` (default 75%) the orchestrator finishes the current step,
 starts no new workers and tells you to run `/clear` and then
 `/neat:resume <id>`. The resumed session reads the run state from disk and

@@ -347,6 +347,7 @@ module.exports = {
   WORKER_STATUSES,
   COMPLEXITIES,
   ACTIVE_MAX_AGE_MS,
+  TERMINAL_STAGES,
   projectRoot,
   runsDir,
   runDir,
