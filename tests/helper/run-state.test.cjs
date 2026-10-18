@@ -411,3 +411,49 @@ test('formatStatus renders jobs with ages from the given clock', () => {
   ]);
   assert.equal(formatStatus(runs, { runsDir: '/p' }), formatStatus(runs, { runsDir: '/p', jobs: [] }));
 });
+
+test('updateRun waits for a held state lock, then applies its change to the fresh state', async () => {
+  const own = makeTempDir('neat-state-lock-');
+  try {
+    const state = rs.createRun(own, { task: 'locked run', mode: 'auto' }, NOW);
+    const lock = path.join(rs.runDir(own, state.id), 'state.lock');
+    fs.writeFileSync(lock, '');
+    const { spawn } = require('node:child_process');
+    // Another process holds the lock, records a worker, then releases it.
+    const holder = spawn(process.execPath, ['-e', `
+      const rs = require(${JSON.stringify(path.join(REPO_ROOT, 'payload', 'neat', 'lib', 'run-state.cjs'))});
+      const fs = require('node:fs');
+      setTimeout(() => {
+        rs.saveRun(${JSON.stringify(own)}, rs.setWorker(rs.loadRun(${JSON.stringify(own)}, ${JSON.stringify(state.id)}), 'tester', 'done', null));
+        fs.rmSync(${JSON.stringify(lock)});
+      }, 300);
+    `], { stdio: 'ignore' });
+    const exited = new Promise((resolve) => holder.on('exit', resolve));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const saved = rs.updateRun(own, state.id, (s) => rs.setWorker(s, 'reviewer', 'running', null), NOW);
+    await exited;
+    assert.deepEqual(saved.workers.map((w) => w.name).sort(), ['reviewer', 'tester']);
+    assert.equal(fs.existsSync(lock), false);
+  } finally {
+    removeDir(own);
+  }
+});
+
+test('updateRun breaks a stale lock and releases its own lock when the change throws', () => {
+  const own = makeTempDir('neat-state-lock-');
+  try {
+    const state = rs.createRun(own, { task: 'stale lock', mode: 'auto' }, NOW);
+    const lock = path.join(rs.runDir(own, state.id), 'state.lock');
+    fs.writeFileSync(lock, '');
+    const old = new Date(Date.now() - 60 * 1000);
+    fs.utimesSync(lock, old, old);
+    const saved = rs.updateRun(own, state.id, (s) => rs.setWorker(s, 'reviewer', 'done', null), NOW);
+    assert.equal(saved.workers[0].name, 'reviewer');
+    assert.equal(fs.existsSync(lock), false);
+    assert.throws(() => rs.updateRun(own, state.id, (s) => rs.setWorker(s, 'nobody', 'done', null)), UsageError);
+    assert.equal(fs.existsSync(lock), false);
+    assert.throws(() => rs.updateRun(own, '20261018-000000-none', (s) => s), /run not found/);
+  } finally {
+    removeDir(own);
+  }
+});

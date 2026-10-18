@@ -201,8 +201,10 @@ function writeBrief(root, id, worker, notes, now, env = process.env, { fix = fal
   const extra = { model: route.model, effort: route.effort };
   // A fix pass clears the review inputs so the next merge always counts the
   // round, even when the reviewers write byte-identical files again.
-  const base = fix ? { ...state, review: { ...state.review, inputs: null } } : state;
-  runState.saveRun(root, runState.setWorker(base, worker, 'running', report, extra), now);
+  runState.updateRun(root, id, (fresh) => {
+    const base = fix ? { ...fresh, review: { ...fresh.review, inputs: null } } : fresh;
+    return runState.setWorker(base, worker, 'running', report, extra);
+  }, now);
   return { file, route };
 }
 

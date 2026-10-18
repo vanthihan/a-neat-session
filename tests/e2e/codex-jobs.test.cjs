@@ -509,3 +509,41 @@ test('reviewer-2: codex below hard, skipped at hard; its job runs read-only into
   assert.ok(exec.stdin.includes('`path:line - high|medium|low - issue`'));
   assert.ok(fs.existsSync(out));
 });
+
+test('a state update made while codex run launches is kept, not overwritten', () => {
+  const fakeBin = makeTempDir('neat-cdx-tmux-');
+  try {
+    // A stand-in tmux: while "opening the window" it records another worker
+    // through the helper, as a parallel brief or run worker call would.
+    fs.writeFileSync(path.join(fakeBin, 'tmux'), [
+      `#!${process.execPath}`,
+      "'use strict';",
+      "const { spawnSync } = require('node:child_process');",
+      'const argv = process.argv.slice(2);',
+      "if (argv[0] === '-V') { process.stdout.write('tmux 9.9\\n'); process.exit(0); }",
+      "if (argv[0] === 'has-session') process.exit(1);",
+      "if (argv[0] === 'new-session' || argv[0] === 'new-window') {",
+      "  const runId = argv[argv.indexOf('_exec') + 1];",
+      `  const r = spawnSync(process.execPath, [${JSON.stringify(helper)}, 'run', 'worker', runId, 'tester', 'done'], { stdio: 'ignore' });`,
+      "  if (r.status !== 0) process.exit(1);",
+      "  process.stdout.write(`@77 ${process.pid}\\n`);",
+      '}',
+      'process.exit(0);',
+      '',
+    ].join('\n'), { mode: 0o755 });
+    const extra = { PATH: `${fakeBin}${path.delimiter}${process.env.PATH}` };
+    const { id, dir } = newRun('state race on launch', extra);
+    assert.match(briefLine(id, 'reviewer', extra), / target=codex action=run$/);
+    const res = neat(['codex', 'run', id, 'reviewer', '--tmux'], extra);
+    assert.equal(res.status, 0, res.stderr);
+    const job = res.stdout.match(/^job=(reviewer-[0-9a-f]{4}) /m)[1];
+    const state = readJson(path.join(dir, 'state.json'));
+    const byName = Object.fromEntries(state.workers.map((w) => [w.name, w]));
+    assert.equal(byName.tester && byName.tester.status, 'done', 'the parallel update must survive');
+    assert.deepEqual([byName.reviewer.engine, byName.reviewer.job], ['codex', job]);
+    assert.equal(fs.existsSync(path.join(dir, 'state.lock')), false, 'the state lock is released');
+    assert.match(waitJob(job).line, /status=failed exit=none/, 'the never-started job settles as lost');
+  } finally {
+    removeDir(fakeBin);
+  }
+});

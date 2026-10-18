@@ -164,6 +164,53 @@ function saveRun(root, state, now = currentTime()) {
   return next;
 }
 
+const LOCK_WAIT_MS = 15000;
+const LOCK_STALE_MS = 10000;
+const LOCK_POLL_MS = 25;
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Takes the run's state.lock (O_EXCL); a lock older than LOCK_STALE_MS was
+// left by a process that died and is broken. Returns the lock file.
+function lockRun(root, id) {
+  const file = path.join(runDir(root, id), 'state.lock');
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      fs.closeSync(fs.openSync(file, 'wx'));
+      return file;
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+    }
+    let age = 0;
+    try {
+      age = Date.now() - fs.statSync(file).mtimeMs;
+    } catch {
+      continue; // released between the open and the stat
+    }
+    if (age > LOCK_STALE_MS) fs.rmSync(file, { force: true });
+    else if (Date.now() > deadline) throw new Error(`run state is locked: ${file}`);
+    else sleepSync(LOCK_POLL_MS);
+  }
+}
+
+// Read-modify-write of a run's state under its lock: loads the current state,
+// saves `change(state)`, returns the saved state. Use it wherever another
+// helper call may write the same run at the same time (parallel workers), so
+// no update is lost.
+function updateRun(root, id, change, now = currentTime()) {
+  assertRunId(id);
+  loadRun(root, id); // unknown run: UsageError before any lock file
+  const lock = lockRun(root, id);
+  try {
+    return saveRun(root, change(loadRun(root, id)), now);
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
+}
+
 function assertOneOf(kind, value, allowed) {
   if (!allowed.includes(value)) {
     throw new UsageError(`invalid ${kind} '${value}' (use ${allowed.join('|')})`);
@@ -256,6 +303,7 @@ module.exports = {
   createRun,
   loadRun,
   saveRun,
+  updateRun,
   setStage,
   setComplexity,
   setWorker,

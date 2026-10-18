@@ -145,10 +145,9 @@ function cmdRunWorker(args) {
   if (args.length !== 3) throw new UsageError('usage: neat run worker <run-id> <name> <status>');
   const [id, name, status] = args;
   const root = runState.projectRoot(process.env, process.cwd());
-  const state = runState.loadRun(root, id);
   const report = path.join(runState.runDir(root, id), `report-${name}.md`);
-  const next = runState.setWorker(state, name, status, report);
-  runState.saveRun(root, next, runState.currentTime(process.env));
+  const change = (state) => runState.setWorker(state, name, status, report);
+  runState.updateRun(root, id, change, runState.currentTime(process.env));
   out(`worker ${name} ${status}`);
   return 0;
 }

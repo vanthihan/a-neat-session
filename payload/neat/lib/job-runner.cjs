@@ -205,7 +205,9 @@ function startJob(root, {
   });
   const report = path.join(dir, `report-${worker}.md`);
   const extra = { engine: 'codex', job: id };
-  runState.saveRun(root, runState.setWorker(state, worker, 'running', report, extra), now);
+  // Re-read under the lock: a parallel brief, run or worker update may have
+  // written the state since it was loaded above.
+  runState.updateRun(root, runId, (fresh) => runState.setWorker(fresh, worker, 'running', report, extra), now);
   return { record, lines: [...launch.lines, ...(started.attach ? [started.attach] : [])] };
 }
 
