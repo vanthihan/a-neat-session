@@ -72,12 +72,70 @@ before(() => {
 
 after(() => removeDir(tmp));
 
-test('packed tarball ships the installer and payload but no tests', () => {
+const RESTART_LINE =
+  'Restart Claude Code (or start a new session) to load /neat:do, /neat:resume, the neat-* agents and the neat hooks.';
+const SHIPPED = [
+  'package.json', 'README.md', 'bin/install.cjs', 'payload/commands/neat/do.md', 'payload/commands/neat/resume.md',
+  'payload/agents/neat-orchestrator.md', 'payload/neat/lib/hooks.cjs', 'payload/neat/lib/output-filter.cjs',
+];
+
+test('packed tarball ships the installer, payload and README but no tests or planning files', () => {
   assert.ok(fs.existsSync(tgz));
-  assert.ok(packedFiles.includes('bin/install.cjs'));
-  assert.ok(packedFiles.includes('payload/commands/neat/do.md'));
-  assert.ok(packedFiles.includes('package.json'));
-  assert.deepEqual(packedFiles.filter((p) => p.startsWith('tests/')), []);
+  assert.deepEqual(SHIPPED.filter((p) => !packedFiles.includes(p)), []);
+  assert.deepEqual(packedFiles.filter((p) => p.startsWith('tests/') || p.startsWith('.planning/')), []);
+});
+
+// The hook command as installed, run without a shell (`node` -> this Node.js).
+function runHookCommand(command, input, env) {
+  const [program, ...args] = command.split(' ');
+  assert.equal(program, 'node', command);
+  const res = spawnSync(process.execPath, args, { input, env, encoding: 'utf8', timeout: NPM_TIMEOUT_MS });
+  if (res.error) throw res.error;
+  return res;
+}
+
+test('npm exec --local registers the hooks and allow rules, and the packed SessionStart hook runs', () => {
+  const proj = newProject('local-hooks');
+  const pre = snapshot(proj);
+  const res = execPackage(['--local'], { cwd: proj });
+  assert.ok(res.stdout.split('\n').includes(RESTART_LINE), res.stdout);
+
+  const helper = path.join(proj, '.claude', 'neat', 'bin', 'neat.cjs');
+  const local = JSON.parse(fs.readFileSync(path.join(proj, '.claude', 'settings.local.json'), 'utf8'));
+  assert.ok(local.permissions.allow.includes(`Bash(node ${helper} *)`));
+  assert.ok(local.permissions.allow.includes('Bash(set -o pipefail)'));
+  const commands = {};
+  for (const [event, name] of [['SessionStart', 'session-start'], ['SubagentStop', 'subagent-stop'], ['PreToolUse', 'pre-bash']]) {
+    const entries = local.hooks[event];
+    assert.equal(entries.length, 1, event);
+    assert.equal(entries[0].hooks[0].command, `node ${helper} hook ${name}`);
+    commands[event] = entries[0].hooks[0].command;
+  }
+
+  const hook = runHookCommand(
+    commands.SessionStart,
+    JSON.stringify({ source: 'compact', session_id: 'x' }),
+    childEnv({ CLAUDE_PROJECT_DIR: proj }),
+  );
+  assert.equal(hook.status, 0, hook.stderr);
+  assert.equal(hook.stdout, '');
+  assert.equal(hook.stderr, '');
+
+  execPackage(['--uninstall', '--local'], { cwd: proj });
+  assert.deepEqual(snapshot(proj), pre);
+});
+
+test('npm exec --local --orchestrator-default sets the session agent and uninstall restores the project', () => {
+  const proj = newProject('local-agent');
+  const pre = snapshot(proj);
+  execPackage(['--local', '--orchestrator-default'], { cwd: proj });
+  const local = JSON.parse(fs.readFileSync(path.join(proj, '.claude', 'settings.local.json'), 'utf8'));
+  assert.equal(local.agent, 'neat-orchestrator');
+  assert.ok(fs.existsSync(path.join(proj, '.claude', 'agents', 'neat-orchestrator.md')));
+
+  execPackage(['--uninstall', '--local'], { cwd: proj });
+  assert.deepEqual(snapshot(proj), pre);
+  assert.ok(!fs.existsSync(path.join(proj, '.claude')));
 });
 
 test('npm exec --local installs into the project and uninstall restores it', () => {
