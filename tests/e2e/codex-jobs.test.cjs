@@ -220,3 +220,146 @@ test('a failing codex gives status=failed and a failed report naming the log', (
   const check = neat(['report', 'check', path.join(dir, 'report-reviewer.md')]);
   assert.equal(check.status, 0, check.stdout);
 });
+
+// --- failure, timeout, lost and cancel paths ---
+
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function alive(pid) {
+  try {
+    process.kill(pid, 0);
+  } catch {
+    return false;
+  }
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return !/^\d+ \(.*\) Z /.test(stat); // a zombie is not running
+  } catch {
+    return true;
+  }
+}
+
+// Waits until fn() is truthy or ms pass; returns the last value.
+function until(fn, ms) {
+  const deadline = Date.now() + ms;
+  let v = fn();
+  while (!v && Date.now() < deadline) {
+    sleepMs(50);
+    v = fn();
+  }
+  return v;
+}
+
+// pid of the fake codex started for the reviewer of run dir `dir`.
+function codexPidFor(dir) {
+  const out = path.join(dir, 'codex-reviewer.md');
+  const call = until(() => calls().find((c) => c.argv[0] === 'exec' && c.argv.includes(out)), 3000);
+  return call && call.pid;
+}
+
+test('wait on a lost job marks it failed with exit=none', () => {
+  const { job, pid } = startReviewer('lost job', { FAKE_CODEX_DELAY_MS: '10000' });
+  process.kill(-pid, 'SIGKILL');
+  assert.ok(until(() => !alive(pid), 3000), 'wrapper must die');
+  const waited = waitJob(job);
+  assert.equal(waited.status, 0, waited.stderr);
+  assert.equal(waited.line, `job ${job} status=failed exit=none worker=reviewer`);
+});
+
+test('wait on several jobs prints one line per job in argument order; bad ids exit 2', () => {
+  const a = startReviewer('first of two', { FAKE_CODEX_DELAY_MS: '200' });
+  const b = startReviewer('second of two');
+  const res = neat(['codex', 'wait', b.job, a.job]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.deepEqual(res.stdout.trim().split('\n'), [
+    `job ${b.job} status=done exit=0 worker=reviewer`,
+    `job ${a.job} status=done exit=0 worker=reviewer`,
+  ]);
+  const unknown = neat(['codex', 'wait', 'reviewer-ffff']);
+  assert.equal(unknown.status, 2);
+  assert.equal(unknown.stderr, 'neat: job not found: reviewer-ffff\n');
+  const evil = neat(['codex', 'wait', '../x']);
+  assert.equal(evil.status, 2);
+  assert.match(evil.stderr, /invalid job id/);
+});
+
+test('timeout, result while running, then cancel stops the whole group', () => {
+  fs.rmSync(log, { force: true });
+  const { dir, job, pid, record } = startReviewer('slow job', { FAKE_CODEX_DELAY_MS: '10000' });
+  const t0 = Date.now();
+  const waited = neat(['codex', 'wait', job, '--timeout', '1']);
+  assert.ok(Date.now() - t0 < 3000, 'timeout must return within 3 s');
+  assert.equal(waited.status, 3);
+  assert.equal(waited.stdout, `job ${job} status=running exit=none worker=reviewer\n`);
+
+  const early = neat(['codex', 'result', job]);
+  assert.equal(early.status, 3);
+  assert.equal(early.stdout, `job ${job} status=running\n`);
+  assert.equal(fs.existsSync(path.join(dir, 'report-reviewer.md')), false);
+
+  const codexPid = codexPidFor(dir);
+  assert.ok(codexPid, 'fake codex must have started');
+  const res = neat(['codex', 'cancel', job]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout, `job ${job} cancelled\n`);
+  const rec = readJson(record);
+  assert.equal(rec.status, 'cancelled');
+  assert.ok(rec.endedAt);
+  assert.ok(until(() => !alive(pid) && !alive(codexPid), 4000), 'wrapper and codex must stop');
+  sleepMs(200);
+  assert.equal(readJson(record).status, 'cancelled', 'the wrapper never overwrites cancelled');
+
+  const result = neat(['codex', 'result', job]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^## Status\nfailed\n/);
+  assert.ok(result.stdout.includes('- job cancelled'));
+  const again = neat(['codex', 'cancel', job]);
+  assert.deepEqual([again.status, again.stdout], [0, `job ${job} already cancelled\n`]);
+});
+
+test('cancel on a finished job sends nothing', () => {
+  const { job } = startReviewer('finished job');
+  assert.match(waitJob(job).line, /status=done/);
+  const res = neat(['codex', 'cancel', job]);
+  assert.deepEqual([res.status, res.stdout], [0, `job ${job} already done\n`]);
+});
+
+test('a failed login shows error lines and a hint, never the prompt', () => {
+  const extra = { FAKE_CODEX_EXIT: '1', FAKE_CODEX_STDERR: 'ERROR: unexpected status 401 Unauthorized' };
+  const { dir, job } = startReviewer('fix ERROR: secret prompt words', extra);
+  assert.match(waitJob(job).line, /status=failed exit=1/);
+  const res = neat(['codex', 'result', job]);
+  assert.equal(res.status, 0, res.stderr);
+  const report = fs.readFileSync(path.join(dir, 'report-reviewer.md'), 'utf8');
+  assert.ok(report.includes('- ERROR: unexpected status 401 Unauthorized'), report);
+  assert.ok(report.includes('- hint: run codex login'));
+  assert.ok(!report.includes('secret prompt words'));
+  assert.ok(words(report) <= 300);
+  assert.equal(neat(['report', 'check', path.join(dir, 'report-reviewer.md')]).status, 0);
+
+  const limit = startReviewer('limit hit', { FAKE_CODEX_EXIT: '1', FAKE_CODEX_STDERR: 'ERROR: usage limit reached' });
+  waitJob(limit.job);
+  assert.ok(neat(['codex', 'result', limit.job]).stdout.includes('- hint: Codex usage limit reached'));
+});
+
+test('no id: result uses the newest job; cancel lists running jobs; --stdin reads the id', () => {
+  const { job } = startReviewer('zzz newest run', { FAKE_CODEX_DELAY_MS: '10000' });
+  try {
+    const none = neat(['codex', 'cancel']);
+    assert.equal(none.status, 2);
+    assert.ok(none.stderr.includes(job), none.stderr);
+    const latest = neat(['codex', 'result']);
+    assert.deepEqual([latest.status, latest.stdout], [3, `job ${job} status=running\n`]);
+    const viaStdin = neat(['codex', 'result', '--stdin'], {}, `\n${job}\n`);
+    assert.deepEqual([viaStdin.status, viaStdin.stdout], [3, `job ${job} status=running\n`]);
+    const empty = neat(['codex', 'result', '--stdin'], {}, '');
+    assert.equal(empty.stdout, `job ${job} status=running\n`);
+    const eof = neat(['codex', 'cancel', '--stdin'], {}, 'NEAT_EOF\n');
+    assert.equal(eof.status, 2);
+  } finally {
+    const res = neat(['codex', 'cancel', '--stdin'], {}, `${job}\n`);
+    assert.equal(res.stdout, `job ${job} cancelled\n`);
+  }
+});
