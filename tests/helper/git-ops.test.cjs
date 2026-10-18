@@ -352,6 +352,44 @@ test('commit stages exactly the guarded owned changes', () => {
   assert.equal(again.stdout.trim(), 'commit skip: no owned changes');
 });
 
+function failingHook(dir) {
+  const hook = path.join(dir, '.git', 'hooks', 'pre-commit');
+  fs.mkdirSync(path.dirname(hook), { recursive: true });
+  fs.writeFileSync(hook, '#!/bin/sh\necho rejected by hook >&2\nexit 1\n', { mode: 0o755 });
+}
+
+test('a commit rejected by a hook leaves the index as it was', { skip: process.platform === 'win32' }, () => {
+  const dir = makeRepo();
+  const run = plannedRun(dir);
+  write(dir, 'a.js', 'two\n');
+  write(dir, 'new.js', 'brand new\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  failingHook(dir);
+  const before = head(dir);
+  const res = neat(dir, ['run', 'commit', run.id]);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /^commit failed$/m);
+  assert.equal(head(dir), before);
+  assert.equal(git(dir, ['diff', '--cached', '--name-only']), '');
+  assert.equal(fs.readFileSync(path.join(dir, 'new.js'), 'utf8'), 'brand new\n');
+  assert.deepEqual(stateOf(run).changed, ['a.js', 'new.js']);
+});
+
+test('a rejected first commit on an unborn branch leaves the index empty', { skip: process.platform === 'win32' }, () => {
+  const dir = plainDir();
+  git(dir, ['init', '-q']);
+  git(dir, ['config', 'user.name', 'Neat Test']);
+  git(dir, ['config', 'user.email', 'neat@example.invalid']);
+  const run = plannedRun(dir);
+  write(dir, 'a.js', 'first\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  failingHook(dir);
+  const res = neat(dir, ['run', 'commit', run.id]);
+  assert.equal(res.status, 1);
+  assert.equal(git(dir, ['ls-files', '--cached']), '');
+  assert.ok(fs.existsSync(path.join(dir, 'a.js')));
+});
+
 test('commit with nothing guarded skips', () => {
   const dir = makeRepo();
   const run = plannedRun(dir);

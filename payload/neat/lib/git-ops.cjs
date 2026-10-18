@@ -154,6 +154,17 @@ function failure(err) {
   return { ok: false, lines: ['commit failed', ...(err.stderrLines || [err.message])] };
 }
 
+// Best effort: take the run's paths back out of the index after a failed commit
+// (working tree untouched), so the user's next commit does not sweep them in.
+function unstage(root, paths) {
+  try {
+    if (gitLib.headSha(root)) gitLib.git(root, [LITERAL, 'reset', '-q', '--', ...paths]);
+    else gitLib.git(root, [LITERAL, 'rm', '-q', '-r', '--cached', '--ignore-unmatch', '--', ...paths]);
+  } catch {
+    // The commit error is what the caller needs to see.
+  }
+}
+
 // Commits exactly the guarded owned changes (state.changed) with an explicit pathspec.
 function commitRun(root, id, now) {
   const state = runState.loadRun(root, id);
@@ -174,6 +185,7 @@ function commitRun(root, id, now) {
     if (files.length === 0) return { ok: true, lines: ['commit skip: no owned changes'] };
     gitLib.git(root, [LITERAL, 'commit', '-q', '-m', subjectOf(state.task), '-m', `Run: ${id}`, '--', ...files]);
   } catch (err) {
+    unstage(root, candidates);
     return failure(err);
   }
   const sha = gitLib.headSha(root);
