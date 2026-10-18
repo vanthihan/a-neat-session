@@ -1,0 +1,171 @@
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+
+const PIPELINE = ['explore', 'plan', 'implement', 'review', 'test', 'docs'];
+const RUN_ID = /^\d{8}-\d{6}-[a-z0-9-]{1,48}$/;
+const RUN_FILE_NAME = /^[a-z][A-Za-z0-9-]*\.(md|txt|patch|json)$/;
+const MAX_FILE_NAME = 80;
+const MAX_SLUG = 40;
+
+class RunUsageError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'UsageError';
+    this.exitCode = 2;
+  }
+}
+
+function projectRoot(env = process.env, cwd = process.cwd()) {
+  if (env.NEAT_PROJECT_DIR) return path.resolve(env.NEAT_PROJECT_DIR);
+  if (env.CLAUDE_PROJECT_DIR) return path.resolve(env.CLAUDE_PROJECT_DIR);
+  try {
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return top || path.resolve(cwd);
+  } catch {
+    return path.resolve(cwd);
+  }
+}
+
+function runsDir(root) {
+  return path.join(root, '.neat', 'runs');
+}
+
+function runDir(root, id) {
+  return path.join(runsDir(root), id);
+}
+
+// Clock: NEAT_NOW (ISO string) overrides the real time, for tests.
+function currentTime(env = process.env) {
+  if (!env.NEAT_NOW) return new Date();
+  const d = new Date(env.NEAT_NOW);
+  if (Number.isNaN(d.getTime())) throw new RunUsageError(`invalid NEAT_NOW: ${env.NEAT_NOW}`);
+  return d;
+}
+
+function trimDashes(s) {
+  return s.replace(/^-+|-+$/g, '');
+}
+
+function slugify(task) {
+  const base = trimDashes(String(task).toLowerCase().replace(/[^a-z0-9]+/g, '-'));
+  const cut = trimDashes(base.slice(0, MAX_SLUG));
+  return cut || 'task';
+}
+
+function pad(n) {
+  return String(n).padStart(2, '0');
+}
+
+function stamp(now) {
+  const date = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}`;
+  const time = `${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;
+  return `${date}-${time}`;
+}
+
+function makeRunId(task, now, existingIds = []) {
+  const base = `${stamp(now)}-${slugify(task)}`;
+  const taken = new Set(existingIds);
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base}-${n}`)) n += 1;
+  return `${base}-${n}`;
+}
+
+function isValidRunId(id) {
+  return typeof id === 'string' && RUN_ID.test(id);
+}
+
+function assertRunId(id) {
+  if (!isValidRunId(id)) throw new RunUsageError(`invalid run id: ${id}`);
+}
+
+function atomicWrite(file, content) {
+  const tmp = `${file}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, content);
+  fs.renameSync(tmp, file);
+}
+
+function listRunIds(root) {
+  const dir = runsDir(root);
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && isValidRunId(e.name))
+    .map((e) => e.name);
+}
+
+function writeState(root, state) {
+  const file = path.join(runDir(root, state.id), 'state.json');
+  atomicWrite(file, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+function createRun(root, { task, mode }, now = currentTime()) {
+  fs.mkdirSync(runsDir(root), { recursive: true });
+  const id = makeRunId(task, now, listRunIds(root));
+  fs.mkdirSync(runDir(root, id));
+  const iso = now.toISOString();
+  const state = {
+    id,
+    task,
+    mode,
+    stage: 'created',
+    stages: PIPELINE.map((name) => ({ name, status: 'pending' })),
+    workers: [],
+    createdAt: iso,
+    updatedAt: iso,
+  };
+  writeState(root, state);
+  return state;
+}
+
+function loadRun(root, id) {
+  assertRunId(id);
+  const file = path.join(runDir(root, id), 'state.json');
+  if (!fs.existsSync(file)) throw new RunUsageError(`run not found: ${id}`);
+  return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function saveRun(root, state, now = currentTime()) {
+  assertRunId(state.id);
+  const next = { ...state, updatedAt: now.toISOString() };
+  writeState(root, next);
+  return next;
+}
+
+function assertRunFileName(name) {
+  const ok = typeof name === 'string' && name.length <= MAX_FILE_NAME
+    && name !== 'state.json' && RUN_FILE_NAME.test(name);
+  if (!ok) throw new RunUsageError(`invalid run file name: ${name}`);
+}
+
+function writeRunFile(root, id, name, content) {
+  assertRunId(id);
+  assertRunFileName(name);
+  const dir = runDir(root, id);
+  if (!fs.existsSync(path.join(dir, 'state.json'))) throw new RunUsageError(`run not found: ${id}`);
+  const file = path.join(dir, name);
+  atomicWrite(file, content);
+  return file;
+}
+
+module.exports = {
+  PIPELINE,
+  RunUsageError,
+  projectRoot,
+  runsDir,
+  runDir,
+  currentTime,
+  slugify,
+  makeRunId,
+  isValidRunId,
+  createRun,
+  loadRun,
+  saveRun,
+  writeRunFile,
+};
