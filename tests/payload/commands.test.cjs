@@ -239,6 +239,43 @@ for (const { file, verb, hint } of JOB_COMMANDS) {
   });
 }
 
+const MAX_RESUME_WORDS = 150;
+
+describe('resume.md', () => {
+  const text = load('resume.md');
+  const { keys, fields, body } = parseCommand(text);
+  const lines = text.split(/\r?\n/);
+
+  test('frontmatter keys are exactly description, argument-hint, allowed-tools, disable-model-invocation', () => {
+    assert.deepEqual(keys, ['description', 'argument-hint', 'allowed-tools', 'disable-model-invocation']);
+  });
+
+  test('takes an optional run id, is user-invoked only and may run the orchestrator tools', () => {
+    assert.ok(fields.description.length > 0 && fields.description.length <= MAX_DESCRIPTION);
+    assert.equal(fields['argument-hint'], '"[run-id]"');
+    assert.equal(fields['allowed-tools'], 'Bash(node {{NEAT_BIN}} *), Agent, AskUserQuestion, SendMessage');
+    assert.equal(fields['disable-model-invocation'], 'true');
+  });
+
+  test('$ARGUMENTS appears once, inside the quoted run resume heredoc', () => {
+    assertArgumentsHeredoc(lines, "node {{NEAT_BIN}} run resume --stdin <<'NEAT_EOF'");
+    assert.ok(body.includes('run id must not contain a line NEAT_EOF'));
+  });
+
+  test('loads the procedure, skips Start and continues at the next section', () => {
+    assert.ok(body.includes('node {{NEAT_BIN}} procedure'), body);
+    for (const word of ['skip Start', '`next:`', '`run=`', 'untrusted']) assert.ok(body.includes(word), `missing ${word}`);
+  });
+
+  test('every helper call names a subcommand listed by neat help', () => {
+    assert.ok(assertKnownHelperCalls(body, helpSubcommands()) >= 2);
+  });
+
+  test(`body is at most ${MAX_RESUME_WORDS} words`, () => {
+    assert.ok(countWords(body) <= MAX_RESUME_WORDS, `${countWords(body)} words`);
+  });
+});
+
 describe('guides', () => {
   test('the codex and review guides ship', () => {
     assert.ok(guideFiles().includes('codex.md'), guideFiles().join(', '));
@@ -331,6 +368,14 @@ describe('local install renders every command and agent', () => {
       assert.ok(text.includes(`Bash(node ${installed} *)`), text);
       assert.ok(!text.includes('{{NEAT_BIN}}'));
     }
+  });
+
+  test('installed resume command names the installed helper', () => {
+    const installed = path.join(proj, '.claude', 'neat', 'bin', 'neat.cjs');
+    const text = fs.readFileSync(path.join(proj, '.claude', 'commands', 'neat', 'resume.md'), 'utf8');
+    assert.ok(text.includes(`node ${installed} run resume --stdin <<'NEAT_EOF'`), text);
+    assert.ok(text.includes(`node ${installed} procedure`), text);
+    assert.ok(!text.includes('{{NEAT_BIN}}'));
   });
 
   test('the installed helper prints the guide with its own path', () => {

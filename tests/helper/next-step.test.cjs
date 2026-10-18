@@ -1,0 +1,234 @@
+'use strict';
+
+// The next-step table: one case per row, from plain state objects and facts.
+
+const { test, describe } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { REPO_ROOT, makeTempDir, removeDir } = require('../support/helpers.cjs');
+
+const LIB = path.join(REPO_ROOT, 'payload', 'neat', 'lib');
+const { SECTIONS, nextStep, formatNext, runFacts } = require(path.join(LIB, 'next-step.cjs'));
+const rs = require(path.join(LIB, 'run-state.cjs'));
+
+const ID = '20261018-120000-add-hello';
+const HELPER = '/abs/neat/bin/neat.cjs';
+const PIPELINE = ['explore', 'research', 'plan', 'implement', 'review', 'test', 'docs'];
+
+// A run of type `type` with `selected` stages; `statuses` overrides entries.
+function makeState({ stage, mode = 'gate', type = 'feature', selected, statuses = {}, workers = {}, tasks = [], extra = {} }) {
+  const chosen = selected || ['explore', 'plan', 'implement', 'review', 'test', 'docs'];
+  const stages = PIPELINE.map((name) => ({
+    name,
+    status: statuses[name] || (chosen.includes(name) ? 'pending' : 'skipped'),
+  }));
+  return {
+    id: ID,
+    mode,
+    stage,
+    ...(type ? { type, selectedStages: chosen } : {}),
+    stages,
+    workers: Object.entries(workers).map(([name, status]) => ({ name, status })),
+    tasks,
+    commits: [],
+    ...extra,
+  };
+}
+
+const facts = (reports = [], runningJobs = []) => ({ reports, runningJobs, helper: HELPER });
+const T = (id, worker, batch, owns = [`src/${id}.js`]) => ({ id, worker, owns, batch });
+
+describe('nextStep', () => {
+  test('SECTIONS maps every pipeline stage to its section', () => {
+    assert.deepEqual(Object.keys(SECTIONS), PIPELINE);
+    assert.equal(SECTIONS.implement, 'Implement');
+    assert.ok(Object.isFrozen(SECTIONS));
+  });
+
+  test('created -> Explore', () => {
+    const next = nextStep(makeState({ stage: 'created', type: null }), facts());
+    assert.deepEqual(next, { section: 'Explore', line: `run stage ${ID} explore, then the Worker loop with W = explorer` });
+  });
+
+  test('explore, explorer done, no type -> Classify', () => {
+    const state = makeState({ stage: 'explore', type: null, workers: { explorer: 'done' } });
+    assert.deepEqual(nextStep(state, facts(['report-explorer.md'])), {
+      section: 'Classify',
+      line: `rate the task from report-explorer.md, run classify ${ID} <level>, then stages ${ID} --type <type>`,
+    });
+  });
+
+  test('explore, explorer not done with its report -> Check step', () => {
+    const state = makeState({ stage: 'explore', type: null, workers: { explorer: 'running' } });
+    assert.deepEqual(nextStep(state, facts(['report-explorer.md'])), {
+      section: 'Explore', line: 'Worker loop step 4 (Check) for explorer',
+    });
+  });
+
+  test('explore, explorer not done and no report -> relaunch', () => {
+    const state = makeState({ stage: 'explore', type: null, workers: { explorer: 'running' } });
+    assert.deepEqual(nextStep(state, facts()), {
+      section: 'Explore', line: 'Worker loop for explorer (write a new brief and launch it again)',
+    });
+  });
+
+  test('explore finished with a type -> first selected stage after explore', () => {
+    const state = makeState({ stage: 'explore', workers: { explorer: 'done' }, statuses: { explore: 'running' } });
+    assert.deepEqual(nextStep(state, facts(['report-explorer.md'])), {
+      section: 'Plan', line: `run stage ${ID} plan, then the Plan section`,
+    });
+    const research = makeState({
+      stage: 'explore', workers: { explorer: 'done' }, selected: ['explore', 'research', 'plan', 'implement'],
+    });
+    assert.equal(nextStep(research, facts()).section, 'Research');
+  });
+
+  test('research finished -> next selected stage; not finished -> Research', () => {
+    const selected = ['explore', 'research'];
+    const done = makeState({ stage: 'research', type: 'research', selected, workers: { explorer: 'done', researcher: 'done' } });
+    assert.equal(nextStep(done, facts()).section, 'Commit');
+    const running = makeState({ stage: 'research', type: 'research', selected, workers: { researcher: 'running' } });
+    assert.deepEqual(nextStep(running, facts()), {
+      section: 'Research', line: 'Worker loop for researcher (write a new brief and launch it again)',
+    });
+  });
+
+  test('plan without recorded tasks -> Plan', () => {
+    const state = makeState({ stage: 'plan' });
+    assert.deepEqual(nextStep(state, facts()), { section: 'Plan', line: `write plan.md, then plan check ${ID}` });
+  });
+
+  test('plan with tasks: gate and step -> Approve, auto -> next selected stage', () => {
+    const tasks = [T('T1', 'implementer', 1)];
+    for (const mode of ['gate', 'step']) {
+      assert.deepEqual(nextStep(makeState({ stage: 'plan', mode, tasks }), facts()), {
+        section: 'Approve', line: 'ask for approval again; approval is not kept on disk',
+      });
+    }
+    assert.deepEqual(nextStep(makeState({ stage: 'plan', mode: 'auto', tasks }), facts()), {
+      section: 'Implement', line: `run stage ${ID} implement, then the Implement section`,
+    });
+    const docsOnly = makeState({ stage: 'plan', mode: 'auto', type: 'docs', selected: ['explore', 'plan', 'docs'], tasks });
+    assert.equal(nextStep(docsOnly, facts()).section, 'Docs');
+  });
+
+  test('implement: the first batch with an unfinished worker', () => {
+    const tasks = [T('T1', 'implementer', 1), T('T2', 'implementer', 1), T('T3', 'implementer', 2, ['src/T1.js'])];
+    const first = makeState({ stage: 'implement', tasks });
+    assert.deepEqual(nextStep(first, facts()), {
+      section: 'Implement', line: 'Worker loop with W = implementer-T1 implementer-T2 and G = --tasks T1,T2',
+    });
+    const second = makeState({ stage: 'implement', tasks, workers: { 'implementer-T1': 'done', 'implementer-T2': 'done' } });
+    assert.deepEqual(nextStep(second, facts()), {
+      section: 'Implement', line: 'Worker loop with W = implementer-T3 and G = --tasks T3',
+    });
+  });
+
+  test('implement: every unfinished worker of the batch has a report -> Check step', () => {
+    const tasks = [T('T1', 'implementer', 1), T('T2', 'implementer', 1)];
+    const state = makeState({ stage: 'implement', tasks, workers: { 'implementer-T1': 'done', 'implementer-T2': 'running' } });
+    assert.deepEqual(nextStep(state, facts(['report-implementer-T2.md'])), {
+      section: 'Implement', line: 'Worker loop step 4 (Check) with W = implementer-T2 and G = --tasks T1,T2',
+    });
+  });
+
+  test('implement: all batches done -> next selected stage', () => {
+    const tasks = [T('T1', 'implementer', 1)];
+    const state = makeState({ stage: 'implement', tasks, workers: { 'implementer-T1': 'done' } });
+    assert.deepEqual(nextStep(state, facts()), { section: 'Review', line: `run stage ${ID} review, then the Review section` });
+  });
+
+  test('docs works like implement with the docs batches', () => {
+    const tasks = [T('T1', 'implementer', 1), T('D1', 'docs', 1), T('D2', 'docs', 1)];
+    const state = makeState({ stage: 'docs', tasks, workers: { 'implementer-T1': 'done', 'docs-D1': 'done' } });
+    assert.deepEqual(nextStep(state, facts()), {
+      section: 'Docs', line: 'Worker loop with W = docs-D2 and G = --tasks D1,D2',
+    });
+    const done = makeState({ stage: 'docs', tasks, workers: { 'docs-D1': 'done', 'docs-D2': 'done' } });
+    assert.equal(nextStep(done, facts()).section, 'Commit');
+  });
+
+  test('review: finished, merge ready, or from the start', () => {
+    const finished = makeState({
+      stage: 'review', workers: { reviewer: 'done', 'reviewer-2': 'done' }, extra: { review: { fixTasks: [] } },
+    });
+    assert.deepEqual(nextStep(finished, facts()), { section: 'Test', line: `run stage ${ID} test, then the Test section` });
+    const merge = makeState({ stage: 'review', workers: { reviewer: 'running' } });
+    assert.deepEqual(nextStep(merge, facts(['report-reviewer-2.md', 'report-reviewer.md'])), {
+      section: 'Review', line: `guide review step 3 (review merge ${ID})`,
+    });
+    const fixes = makeState({
+      stage: 'review', workers: { reviewer: 'done', 'reviewer-2': 'done' }, extra: { review: { fixTasks: ['T1'] } },
+    });
+    assert.deepEqual(nextStep(fixes, facts(['report-reviewer.md'])), { section: 'Review', line: 'guide review from step 1' });
+  });
+
+  test('test: done -> next stage; report -> Check; else Test', () => {
+    assert.equal(nextStep(makeState({ stage: 'test', workers: { tester: 'done' } }), facts()).section, 'Docs');
+    assert.deepEqual(nextStep(makeState({ stage: 'test', workers: { tester: 'running' } }), facts(['report-tester.md'])), {
+      section: 'Test', line: 'Worker loop step 4 (Check) for tester',
+    });
+    assert.deepEqual(nextStep(makeState({ stage: 'test' }), facts()), {
+      section: 'Test', line: 'Worker loop for tester (write a new brief and launch it again)',
+    });
+  });
+
+  test('all selected stages done: Commit in gate and auto without commits, else Finish', () => {
+    const selected = ['explore', 'implement', 'test'];
+    const base = { stage: 'test', type: 'small-fix', selected, workers: { tester: 'done' } };
+    const commit = { section: 'Commit', line: `the Commit section (run commit ${ID})` };
+    const finish = { section: 'Finish', line: `run stage ${ID} done, then the Finish section` };
+    assert.deepEqual(nextStep(makeState({ ...base, mode: 'gate' }), facts()), commit);
+    assert.deepEqual(nextStep(makeState({ ...base, mode: 'auto' }), facts()), commit);
+    assert.deepEqual(nextStep(makeState({ ...base, mode: 'step' }), facts()), finish);
+    const committed = makeState({ ...base, mode: 'gate', extra: { commits: [{ sha: 'abc' }] } });
+    assert.deepEqual(nextStep(committed, facts()), finish);
+  });
+
+  test('done and cancelled runs have nothing to resume', () => {
+    for (const stage of ['done', 'cancelled']) {
+      assert.deepEqual(nextStep(makeState({ stage }), facts()), {
+        section: null, line: `run finished (stage=${stage}); nothing to resume`,
+      });
+    }
+  });
+
+  test('a running Codex job comes first', () => {
+    const state = makeState({ stage: 'test', workers: { tester: 'running' } });
+    const next = nextStep(state, facts([], ['job-a1', 'job-b2']));
+    assert.equal(next.section, 'Test');
+    assert.ok(next.line.startsWith(`first run node ${HELPER} codex wait job-a1 job-b2, then `), next.line);
+  });
+
+  test('task ids that are not T<n> or D<n> are never printed', () => {
+    const tasks = [T('T1;rm -rf x', 'implementer', 1), T('T2', 'implementer', 1)];
+    const next = nextStep(makeState({ stage: 'implement', tasks }), facts());
+    assert.ok(!next.line.includes('rm -rf'), next.line);
+  });
+
+  test('formatNext prints `next: <Section> - <line>` or the bare finished line', () => {
+    assert.equal(formatNext({ section: 'Plan', line: 'x' }), 'next: Plan - x');
+    assert.equal(formatNext({ section: null, line: 'run finished (stage=done); nothing to resume' }),
+      'run finished (stage=done); nothing to resume');
+  });
+});
+
+describe('runFacts', () => {
+  test('lists the report files and the running Codex jobs of the run', () => {
+    const root = makeTempDir('neat-next-');
+    try {
+      const state = rs.createRun(root, { task: 'facts', mode: 'gate' }, new Date('2026-10-18T12:00:00Z'));
+      const dir = rs.runDir(root, state.id);
+      fs.writeFileSync(path.join(dir, 'report-tester.md'), 'x');
+      fs.writeFileSync(path.join(dir, 'report-explorer.md'), 'x');
+      fs.writeFileSync(path.join(dir, 'brief-explorer.md'), 'x');
+      const f = runFacts(root, state);
+      assert.deepEqual(f.reports, ['report-explorer.md', 'report-tester.md']);
+      assert.deepEqual(f.runningJobs, []);
+      assert.equal(f.helper, path.join(REPO_ROOT, 'payload', 'neat', 'bin', 'neat.cjs'));
+    } finally {
+      removeDir(root);
+    }
+  });
+});

@@ -228,9 +228,15 @@ function assertOneOf(kind, value, allowed) {
 }
 
 // Pure: returns a new state with `stage` running (or the run finished).
+// Setting the stage that is already running changes nothing, so a resumed
+// session may start that stage's section again.
 function setStage(state, stage) {
   assertOneOf('stage', stage, STAGES);
   const terminal = stage === 'done' || stage === 'cancelled';
+  const current = (state.stages || []).find((s) => s.name === stage);
+  if (!terminal && state.stage === stage && current && current.status === 'running') {
+    return { ...state, stages: state.stages.map((s) => ({ ...s })) };
+  }
   const stages = state.stages.map((s) => {
     if (s.status === 'running') return { ...s, status: stage === 'cancelled' ? 'cancelled' : 'done' };
     if (!terminal && s.name === stage) return { ...s, status: 'running' };

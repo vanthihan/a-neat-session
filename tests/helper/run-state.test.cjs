@@ -511,3 +511,9 @@ test('activeRuns keeps unfinished runs updated within 24 hours, newest update fi
     removeDir(own);
   }
 });
+
+test('setting the running stage again keeps it running', () => {
+  const state = rs.setStage(rs.setStage({ id: 'x', stage: 'created', stages: [{ name: 'explore', status: 'pending' }] }, 'explore'), 'explore');
+  assert.equal(state.stage, 'explore');
+  assert.deepEqual(state.stages, [{ name: 'explore', status: 'running' }]);
+});

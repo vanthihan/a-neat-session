@@ -63,6 +63,7 @@ const HELP = [
   'neat usage-capture [--path <file>] [--quiet]',
   ...codexCli.HELP_LINES,
   'neat guide <topic>',
+  'neat procedure',
   'neat hook <name>',
   'neat help',
 ].join('\n');
@@ -282,16 +283,56 @@ function cmdRunCommit(args) {
   return printResult(gitOps.commitRun(root, args[0], runState.currentTime(process.env)));
 }
 
-// Where a run stands and its next step, read from disk.
+const RESUME_USAGE = 'usage: neat run resume [<run-id>] [--stdin]';
+const MAX_SHOWN_ID = 80;
+
+// The run id given to `run resume`: an argument, the first non-empty stdin
+// line with --stdin, or null (newest unfinished run).
+function resumeId(args) {
+  if (args.length === 0) return null;
+  if (args.length === 1 && args[0] === '--stdin') {
+    const line = readStdin().split(/\r?\n/).map((l) => l.trim()).find((l) => l !== '');
+    return line === undefined ? null : line;
+  }
+  if (args.length === 1 && !args[0].startsWith('--')) return args[0];
+  throw new UsageError(RESUME_USAGE);
+}
+
+// Where a run stands and its exact next step, read from disk (at most 10 lines).
 function cmdRunResume(args) {
-  if (args.length !== 1) throw new UsageError('usage: neat run resume [<run-id>] [--stdin]');
-  const [id] = args;
-  if (!runState.isValidRunId(id)) throw new UsageError(`invalid run id: ${id}`);
+  const id = resumeId(args);
+  if (id !== null && !runState.isValidRunId(id)) throw new UsageError(`invalid run id: ${id.slice(0, MAX_SHOWN_ID)}`);
   const root = runState.projectRoot(process.env, process.cwd());
-  const state = runState.loadRun(root, id);
-  const dir = runState.runDir(root, id);
-  out(`run=${state.id} mode=${state.mode} stage=${state.stage} type=${state.type || 'none'} dir=${dir}`);
-  out(nextStepLib.formatNext(nextStepLib.nextStep(state, nextStepLib.runFacts(root, state))));
+  const now = runState.currentTime(process.env);
+  const state = id !== null
+    ? { ...runState.loadRun(root, id), id }
+    : runState.activeRuns(root, now, { maxAgeMs: Infinity })[0];
+  if (!state) {
+    out(`no unfinished neat run in ${root}`);
+    return 0;
+  }
+  const facts = nextStepLib.runFacts(root, state);
+  nextStepLib.resumeLines(state, facts, runState.runDir(root, state.id)).forEach((line) => out(line));
+  return 0;
+}
+
+const PROCEDURE_FILE = path.resolve(__dirname, '..', '..', 'commands', 'neat', 'do.md');
+
+// The /neat:do procedure next to this helper: frontmatter removed, helper
+// path filled in, for a session that continues a run (`/neat:resume`).
+function cmdProcedure(args) {
+  if (args.length !== 0) throw new UsageError('usage: neat procedure');
+  let text;
+  try {
+    text = fs.readFileSync(PROCEDURE_FILE, 'utf8');
+  } catch {
+    throw new UsageError(`procedure not found: ${PROCEDURE_FILE}`);
+  }
+  const lines = text.split(/\r?\n/);
+  const end = lines[0] === '---' ? lines.indexOf('---', 1) : -1;
+  const body = (end > 0 ? lines.slice(end + 1) : lines).join('\n');
+  out('In Start, the task text replaces $ARGUMENTS.');
+  out(body.replace(/\{\{NEAT_BIN\}\}/g, () => __filename).trim());
   return 0;
 }
 
@@ -431,6 +472,7 @@ function dispatch(argv) {
   if (cmd === 'report' && sub === 'check') return cmdReportCheck(rest);
   if (cmd === 'review' && sub === 'merge') return cmdReviewMerge(rest);
   if (cmd === 'guide') return cmdGuide(argv.slice(1));
+  if (cmd === 'procedure') return cmdProcedure(argv.slice(1));
   if (cmd === 'codex') return codexCli.dispatchCodex(argv.slice(1), { out, env: process.env, cwd: process.cwd(), readStdin });
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     out(HELP);

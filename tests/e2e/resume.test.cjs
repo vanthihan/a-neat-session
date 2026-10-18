@@ -183,3 +183,112 @@ describe('SessionStart entry over existing local settings', () => {
     assert.deepEqual(readJson(settingsFile), user);
   });
 });
+
+describe('run resume and procedure through the installed helper', () => {
+  let tmp;
+  let proj;
+  let helper;
+  let env;
+
+  const helperRun = (args, { input, now = NOW } = {}) =>
+    runNode([helper, ...args], { cwd: proj, env: { ...env, NEAT_NOW: now }, input });
+  const newRun = (task, now) => /^id=(\S+)/.exec(helperRun(['run', 'new', task], { now }).stdout)[1];
+
+  before(() => {
+    tmp = makeTempDir('neat-resume-cli-');
+    proj = path.join(tmp, 'proj');
+    fs.mkdirSync(proj);
+    helper = path.join(proj, '.claude', 'neat', 'bin', 'neat.cjs');
+    env = childEnv({ NEAT_PROJECT_DIR: proj, NEAT_NOW: NOW });
+    const res = runNode([INSTALLER, '--local'], { cwd: proj, env });
+    assert.equal(res.status, 0, res.stderr);
+  });
+
+  after(() => removeDir(tmp));
+
+  test('with no unfinished run it says so and exits 0', () => {
+    const res = helperRun(['run', 'resume']);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout, `no unfinished neat run in ${proj}\n`);
+  });
+
+  test('with no id it picks the newest unfinished run of any age', () => {
+    const old = newRun('old task', '2026-10-10T08:00:00.000Z');
+    const finished = newRun('finished task', NOW);
+    assert.equal(helperRun(['run', 'stage', finished, 'done']).status, 0);
+    const res = helperRun(['run', 'resume']);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, new RegExp(`^run=${old} mode=gate stage=created type=none `));
+    assert.equal(helperRun(['run', 'stage', old, 'cancelled']).status, 0);
+  });
+
+  test('prints the run line, worker states, next step and procedure line (at most 10 lines)', () => {
+    const id = newRun('add a hello function', NOW);
+    assert.equal(helperRun(['run', 'stage', id, 'explore']).status, 0);
+    assert.equal(helperRun(['run', 'worker', id, 'explorer', 'running']).status, 0);
+    const res = helperRun(['run', 'resume']);
+    assert.equal(res.status, 0, res.stderr);
+    const lines = res.stdout.trimEnd().split('\n');
+    assert.ok(lines.length <= 10, res.stdout);
+    assert.deepEqual(lines, [
+      `run=${id} mode=gate stage=explore type=none dir=${path.join(proj, '.neat', 'runs', id)}`,
+      'workers: done=none running=explorer failed=none',
+      'next: Explore - Worker loop for explorer (write a new brief and launch it again)',
+      `procedure: run node ${helper} procedure once; skip Start (keep id, mode and dir above) and continue at ## Explore`,
+    ]);
+    for (const input of [`${id}\n`, `\n  ${id}  \n`, '', '\n\n']) {
+      const viaStdin = helperRun(['run', 'resume', '--stdin'], { input });
+      assert.equal(viaStdin.status, 0, viaStdin.stderr);
+      assert.equal(viaStdin.stdout, res.stdout, JSON.stringify(input));
+    }
+    assert.equal(helperRun(['run', 'resume', id]).stdout, res.stdout);
+  });
+
+  test('a finished run prints nothing to resume and no procedure line', () => {
+    const id = newRun('done already', NOW);
+    assert.equal(helperRun(['run', 'stage', id, 'done']).status, 0);
+    const res = helperRun(['run', 'resume', id]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /run finished \(stage=done\); nothing to resume/);
+    assert.ok(!res.stdout.includes('procedure:'));
+  });
+
+  test('a malformed id exits 2 before any path is built; an unknown id exits 2', () => {
+    for (const args of [['../x'], ['20261018-120000-a/../../b']]) {
+      const res = helperRun(['run', 'resume', ...args]);
+      assert.equal(res.status, 2, res.stdout);
+      assert.match(res.stderr, /invalid run id/);
+      assert.equal(res.stdout, '');
+    }
+    const viaStdin = helperRun(['run', 'resume', '--stdin'], { input: '../x\n' });
+    assert.equal(viaStdin.status, 2);
+    assert.match(viaStdin.stderr, /invalid run id/);
+    const eof = helperRun(['run', 'resume', '--stdin'], { input: 'NEAT_EOF\n' });
+    assert.equal(eof.status, 2);
+    assert.match(eof.stderr, /must not contain a line NEAT_EOF/);
+    const unknown = helperRun(['run', 'resume', '20200101-000000-nope']);
+    assert.equal(unknown.status, 2);
+    assert.match(unknown.stderr, /run not found/);
+    assert.equal(helperRun(['run', 'resume', 'a', 'b']).status, 2);
+  });
+
+  test('procedure prints the installed /neat:do procedure with the installed helper path', () => {
+    const res = helperRun(['procedure']);
+    assert.equal(res.status, 0, res.stderr);
+    const lines = res.stdout.split('\n');
+    assert.equal(lines[0], 'In Start, the task text replaces $ARGUMENTS.');
+    assert.ok(lines.includes('## Worker loop'));
+    assert.ok(res.stdout.includes(`node ${helper} run new --stdin`), res.stdout);
+    assert.ok(!res.stdout.includes('{{NEAT_BIN}}'));
+    assert.ok(!res.stdout.includes('disable-model-invocation'));
+    assert.equal(helperRun(['procedure', 'extra']).status, 2);
+  });
+
+  test('procedure without its command file exits 2 and names the missing path', () => {
+    const copy = path.join(tmp, 'copy');
+    fs.cpSync(path.join(REPO_ROOT, 'payload', 'neat'), path.join(copy, 'neat'), { recursive: true });
+    const res = runNode([path.join(copy, 'neat', 'bin', 'neat.cjs'), 'procedure'], { cwd: proj, env });
+    assert.equal(res.status, 2);
+    assert.ok(res.stderr.includes(`procedure not found: ${path.join(copy, 'commands', 'neat', 'do.md')}`), res.stderr);
+  });
+});
