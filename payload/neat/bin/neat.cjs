@@ -21,8 +21,11 @@ const codexCli = require(path.join(LIB, 'cli-codex.cjs'));
 const codex = require(path.join(LIB, 'codex.cjs'));
 const guide = require(path.join(LIB, 'guide.cjs'));
 const jobs = require(path.join(LIB, 'jobs.cjs'));
+const reviewMerge = require(path.join(LIB, 'review-merge.cjs'));
 
 const MAX_ERROR_LINES = 5;
+const MAX_MERGE_TOP = 5;
+const MAX_MERGE_LINE = 200;
 
 const HELP = [
   'neat run new [--stdin] [--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [--research] [--tmux] [task]',
@@ -38,6 +41,7 @@ const HELP = [
   'neat route <run-id> <worker|--all>',
   'neat write <run-id> <file-name> --stdin',
   'neat report check <file>',
+  'neat review merge <run-id>',
   'neat config show [<run-id>]',
   'neat config get <profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault>',
   'neat status [--json]',
@@ -353,6 +357,20 @@ function cmdUsageCapture(args) {
   return 0;
 }
 
+// Merges both reviewers' findings into review-merged.md. Prints a counts line
+// (later fields may be appended), the top findings and the file path.
+function cmdReviewMerge(args) {
+  if (args.length !== 1) throw new UsageError('usage: neat review merge <run-id>');
+  const root = runState.projectRoot(process.env, process.cwd());
+  const { file, counts, lines } = reviewMerge.mergeRun(root, args[0]);
+  const fields = ['critical', 'warning', 'info', 'both', 'disputed'].map((k) => `${k}=${counts[k]}`);
+  out(`merged ${fields.join(' ')}`);
+  const top = lines.slice(0, MAX_MERGE_TOP).map((l) => l.slice(0, MAX_MERGE_LINE));
+  out(top.length > 0 ? top.join('\n') : 'none');
+  out(`file: ${file}`);
+  return 0;
+}
+
 function dispatch(argv) {
   const [cmd, sub, ...rest] = argv;
   if (cmd === 'usage-capture') return cmdUsageCapture(argv.slice(1));
@@ -371,6 +389,7 @@ function dispatch(argv) {
   if (cmd === 'status') return cmdStatus(argv.slice(1));
   if (cmd === 'write') return cmdWrite(argv.slice(1));
   if (cmd === 'report' && sub === 'check') return cmdReportCheck(rest);
+  if (cmd === 'review' && sub === 'merge') return cmdReviewMerge(rest);
   if (cmd === 'guide') return cmdGuide(argv.slice(1));
   if (cmd === 'codex') return codexCli.dispatchCodex(argv.slice(1), { out, env: process.env, cwd: process.cwd(), readStdin });
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
