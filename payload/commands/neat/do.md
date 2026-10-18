@@ -59,7 +59,7 @@ gate and step: ask with AskUserQuestion, showing at most 15 lines (task ids, tit
 auto: skip this section without asking.
 
 ## Implement
-Run `node {{NEAT_BIN}} run stage {id} implement`. For each batch in the `implement=` part, in order, run the Worker loop with W = `implementer-{T}` for every task in the batch and G = `--tasks {comma-separated task ids of the batch}`. Tasks in one batch own disjoint files and run in parallel; batches run one after another.
+Run `node {{NEAT_BIN}} run stage {id} implement`. For each batch in the `implement=` part, in order, run the Worker loop with W = `implementer-{T}` for every task in the batch and G = `--tasks {comma-separated task ids of the batch}`. Tasks in one batch own disjoint files and run in parallel; batches run one after another. The guard checks a batch against all files its tasks own, so it cannot tell which task of a batch edited a file.
 
 Step mode: after the user continues, run `node {{NEAT_BIN}} run commit {id}` and keep its output line.
 

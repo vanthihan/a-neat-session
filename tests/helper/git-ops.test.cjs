@@ -205,6 +205,60 @@ test('guard without --tasks (read-only stage) fails on any new change', () => {
   assert.match(res.stdout, /^guard violation: a\.js /m);
 });
 
+test('guard catches a read-only edit of a file an earlier task already changed', () => {
+  const dir = makeRepo();
+  const run = plannedRun(dir);
+  write(dir, 'a.js', 'impl\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  write(dir, 'a.js', 'impl\nTESTER-TAMPER\n');
+  const res = neat(dir, ['run', 'guard', run.id]);
+  assert.equal(res.status, 1, res.stdout);
+  assert.match(res.stdout, /^guard violation: a\.js changed during a read-only stage$/m);
+  const state = stateOf(run);
+  assert.deepEqual(state.changed, []);
+  assert.deepEqual(state.unowned, ['a.js']);
+  assert.equal(neat(dir, ['run', 'guard', run.id]).status, 0, 'an unchanged tampered file is reported once');
+  const commit = neat(dir, ['run', 'commit', run.id]);
+  assert.equal(commit.stdout.trim(), 'commit skip: no owned changes');
+  assert.ok(!git(dir, ['show', 'HEAD:a.js']).includes('TESTER-TAMPER'));
+});
+
+test('guard catches a later batch editing a file it does not own', () => {
+  const dir = makeRepo();
+  const plan = PLAN.replace('## D1:', '## T2: Other code\nworker: implementer\nowns: b.js\ndo: Add b.js.\n\n## D1:');
+  const run = plannedRun(dir, plan);
+  write(dir, 'a.js', 'impl\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  write(dir, 'a.js', 'impl\nfrom T2\n');
+  write(dir, 'b.js', 'b\n');
+  const res = neat(dir, ['run', 'guard', run.id, '--tasks', 'T2']);
+  assert.equal(res.status, 1, res.stdout);
+  assert.match(res.stdout, /^guard violation: a\.js not owned by T2$/m);
+  assert.deepEqual(stateOf(run).changed, ['b.js']);
+});
+
+test('guard catches a reader editing a file that was dirty before the run', () => {
+  const dir = makeRepo();
+  const run = plannedRun(dir);
+  write(dir, 'p.txt', 'user work overwritten\n');
+  const res = neat(dir, ['run', 'guard', run.id]);
+  assert.equal(res.status, 1, res.stdout);
+  assert.match(res.stdout, /^guard violation: p\.txt changed during a read-only stage$/m);
+});
+
+test('commit refuses a guarded file that changed after the last guard', () => {
+  const dir = makeRepo();
+  const run = plannedRun(dir);
+  write(dir, 'a.js', 'impl\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  const before = head(dir);
+  write(dir, 'a.js', 'impl\nunguarded\n');
+  const res = neat(dir, ['run', 'commit', run.id]);
+  assert.equal(res.status, 1);
+  assert.equal(res.stdout.trim(), 'commit refused: a.js changed since the last guard');
+  assert.equal(head(dir), before);
+});
+
 test('guard rejects unknown task ids', () => {
   const dir = makeRepo();
   const run = plannedRun(dir);

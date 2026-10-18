@@ -49,26 +49,47 @@ function violationText(file, taskIds) {
     : `${file} changed during a read-only stage`;
 }
 
-// Checks HEAD and the paths that changed since the last guard against the
-// files owned by `taskIds` (none = read-only stage). Records results in state.json.
+function hashesOf(state) {
+  return state.hashes && typeof state.hashes === 'object' ? state.hashes : {};
+}
+
+// Known paths whose content differs from the fingerprint recorded by the last
+// guard (or by `run new` for files dirty at start). A path without a record
+// (a run created before fingerprints existed) is adopted, not reported.
+function touchedPaths(known, before, current) {
+  return [...known].filter((p) => Object.hasOwn(before, p) && current[p] !== before[p]);
+}
+
+// Checks HEAD, the paths that are new since the last guard and the known paths
+// whose content changed since the last guard against the files owned by
+// `taskIds` (none = read-only stage). A batch is checked against the union of
+// its tasks' files. A guarded change that a non-owner edits again moves from
+// `changed` to `unowned`, so `commitRun` never commits it. Records results in state.json.
 function guardRun(root, id, taskIds = [], now) {
   const state = runState.loadRun(root, id);
   if (!gitLib.isGitRepo(root)) return { ok: true, lines: ['guard skip: not a git repository'] };
   const allowed = new Set(union(tasksById(state, taskIds).map((t) => t.owns)));
   const dirty = list(state, 'dirtyAtStart');
-  const known = new Set([...dirty, ...list(state, 'changed'), ...list(state, 'unowned')]);
+  const changed = list(state, 'changed');
+  const known = new Set([...dirty, ...changed, ...list(state, 'unowned')]);
+  const before = hashesOf(state);
+  const current = gitLib.fingerprints(root, [...known]);
+  const touched = touchedPaths(known, before, current);
   const fresh = gitLib.porcelainPaths(root).filter((p) => !known.has(p));
   const messages = [];
   const head = headViolation(root, state);
   if (head) messages.push(head);
   const owned = fresh.filter((p) => allowed.has(p));
   const foreign = fresh.filter((p) => !allowed.has(p));
-  foreign.forEach((p) => messages.push(violationText(p, taskIds)));
+  const tampered = touched.filter((p) => !allowed.has(p));
+  union([foreign, tampered]).forEach((p) => messages.push(violationText(p, taskIds)));
+  const tainted = new Set(tampered.filter((p) => changed.includes(p)));
   const at = (now || new Date()).toISOString();
   const next = {
     ...state,
-    changed: union([list(state, 'changed'), owned]),
-    unowned: union([list(state, 'unowned'), foreign]),
+    changed: union([changed.filter((p) => !tainted.has(p)), owned]),
+    unowned: union([list(state, 'unowned'), foreign, [...tainted]]),
+    hashes: { ...before, ...current, ...gitLib.fingerprints(root, fresh) },
     violations: [...list(state, 'violations'), ...messages.map((message) => ({ stage: state.stage, message, at }))],
   };
   runState.saveRun(root, next, now);
@@ -142,6 +163,10 @@ function commitRun(root, id, now) {
   const present = new Set(gitLib.porcelainPaths(root));
   const candidates = list(state, 'changed').filter((p) => !dirty.has(p) && present.has(p));
   if (candidates.length === 0) return { ok: true, lines: ['commit skip: no owned changes'] };
+  const unguarded = touchedPaths(candidates, hashesOf(state), gitLib.fingerprints(root, candidates));
+  if (unguarded.length > 0) {
+    return { ok: false, lines: [`commit refused: ${unguarded.join(', ')} changed since the last guard`] };
+  }
   let files;
   try {
     gitLib.git(root, [LITERAL, 'add', '-A', '--', ...candidates]);
@@ -153,9 +178,11 @@ function commitRun(root, id, now) {
   }
   const sha = gitLib.headSha(root);
   const done = new Set(candidates);
+  const hashes = Object.fromEntries(Object.entries(hashesOf(state)).filter(([p]) => !done.has(p)));
   const next = {
     ...state,
     headSha: sha,
+    hashes,
     changed: list(state, 'changed').filter((p) => !done.has(p)),
     commits: [...list(state, 'commits'), { sha, stage: state.stage, files }],
   };

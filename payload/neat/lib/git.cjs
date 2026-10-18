@@ -2,7 +2,9 @@
 
 // Safe git primitives: argument arrays only (no shell), `--` before pathspecs.
 
+const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 
 const MAX_BUFFER = 64 * 1024 * 1024;
@@ -87,4 +89,24 @@ function isIgnored(root, rel) {
   }
 }
 
-module.exports = { git, isGitRepo, headSha, porcelainPaths, isIgnored, lastLines };
+// Content fingerprint of `rel` under `root`: a sha256 of a regular file, the
+// target of a symlink, or a sentinel for a missing path or a directory.
+function fingerprint(root, rel) {
+  const abs = path.join(root, rel);
+  let st;
+  try {
+    st = fs.lstatSync(abs);
+  } catch {
+    return 'missing';
+  }
+  if (st.isSymbolicLink()) return `link:${fs.readlinkSync(abs)}`;
+  if (!st.isFile()) return st.isDirectory() ? 'dir' : 'other';
+  return `sha256:${crypto.createHash('sha256').update(fs.readFileSync(abs)).digest('hex')}`;
+}
+
+// { path: fingerprint } for every path in `paths`.
+function fingerprints(root, paths) {
+  return Object.fromEntries(paths.map((p) => [p, fingerprint(root, p)]));
+}
+
+module.exports = { git, isGitRepo, headSha, porcelainPaths, isIgnored, lastLines, fingerprints };
