@@ -432,10 +432,12 @@ known noisy command is rewritten to
 set -o pipefail; <your command> 2>&1 | node <helper> filter <run-id> <test|build|install> <log>
 ```
 
-The full output goes to `.neat/runs/<id>/logs/`. Output up to 40 lines and
-2000 characters comes back unchanged; longer output is trimmed to a header, the
-failure-relevant lines with a little context and the last lines. The
-command's own exit code is kept.
+The full output goes to `.neat/runs/<id>/logs/`. A first line naming that log
+is printed as soon as the command starts, so the path is known even when the
+command times out or is interrupted. When the command ends, output up to 40
+lines and 2000 characters comes back unchanged; longer output is trimmed to a
+header, the failure-relevant lines with a little context and the last lines.
+The command's own exit code is kept.
 
 Only the session that started the run is filtered, and its logs go to that
 run; other sessions in the same project are left alone. A run that recorded

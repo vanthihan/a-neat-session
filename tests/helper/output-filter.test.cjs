@@ -9,7 +9,7 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawnSync } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 const { REPO_ROOT, childEnv, makeTempDir, removeDir } = require('../support/helpers.cjs');
 
 const LIB = path.join(REPO_ROOT, 'payload', 'neat', 'lib');
@@ -20,6 +20,7 @@ const rs = require(path.join(LIB, 'run-state.cjs'));
 const NOW = new Date('2026-10-18T12:00:00.000Z');
 const HEADER = /^\[neat\] output trimmed to failure-relevant lines \((\d+) lines total\); exit code unchanged; full log: (\S+)$/;
 const HAS_BASH = spawnSync('bash', ['-c', 'exit 0']).status === 0;
+const start = (log) => `[neat] filtering output; full log: ${log}`;
 
 let tmp;
 let root;
@@ -64,7 +65,7 @@ describe('summarizing', () => {
     const res = filter([runId, 'test', log], raw);
     assert.equal(res.status, 0);
     assert.equal(res.stderr, '');
-    assert.equal(res.stdout, `green start\nprogress 100%\n${lines(23)}`);
+    assert.equal(res.stdout, `${start(log)}\ngreen start\nprogress 100%\n${lines(23)}`);
     assert.equal(fs.readFileSync(log, 'utf8'), raw);
     assert.equal(fs.statSync(path.dirname(log)).mode & 0o777, 0o700);
   });
@@ -77,8 +78,9 @@ describe('summarizing', () => {
     assert.equal(res.status, 0);
     assert.equal(res.stderr, '');
     const out = res.stdout.trimEnd().split('\n');
-    const m = HEADER.exec(out[0]);
-    assert.ok(m, out[0]);
+    assert.equal(out[0], start(log));
+    const m = HEADER.exec(out[1]);
+    assert.ok(m, out[1]);
     assert.equal(m[1], '500');
     assert.equal(m[2], log);
     for (const [i, text] of fails) {
@@ -101,7 +103,8 @@ describe('summarizing', () => {
     const raw = lines(3000, (i) => (i % 3 === 0 ? `Error ${i}: ${'x'.repeat(300)}` : null));
     const res = filter([runId, 'test', log], raw);
     const out = res.stdout.trimEnd().split('\n');
-    assert.ok(HEADER.test(out[0]), out[0]);
+    assert.equal(out[0], start(log));
+    assert.ok(HEADER.test(out[1]), out[1]);
     assert.ok(out.length <= 80, `${out.length} lines`);
     assert.ok(res.stdout.length <= 6000, `${res.stdout.length} chars`);
     assert.equal(fs.statSync(log).size, Buffer.byteLength(raw));
@@ -117,6 +120,30 @@ describe('summarizing', () => {
   test('summarize passes short output through', () => {
     assert.equal(summarize('a\nb\n', '/x/logs/test-1.txt'), 'a\nb\n');
     assert.equal(summarize('', '/x/logs/test-1.txt'), '');
+  });
+});
+
+describe('a command killed before it ends', () => {
+  test('the log path is printed before the input ends, so it survives a timeout or interrupt', async () => {
+    const log = newLog();
+    const child = spawn(process.execPath, [HELPER, 'filter', runId, 'test', log], { cwd: root, env: childEnv() });
+    let out = '';
+    child.stdout.on('data', (d) => { out += d; });
+    child.stdin.write('running 1 test\n');
+    const seen = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), 30000);
+      child.stdout.on('data', () => {
+        if (out.includes('\n')) {
+          clearTimeout(timer);
+          resolve(true);
+        }
+      });
+    });
+    child.kill('SIGTERM');
+    await new Promise((resolve) => child.on('close', resolve));
+    assert.ok(seen, 'nothing printed while the command was still running');
+    assert.equal(out.split('\n')[0], `[neat] filtering output; full log: ${log}`);
+    assert.ok(fs.existsSync(log), 'the named log exists');
   });
 });
 
@@ -206,7 +233,8 @@ describe('under bash pipefail', { skip: !HAS_BASH && 'bash not available' }, () 
     assert.equal(res.status, 3, res.stderr);
     assert.equal(res.stderr, '');
     assert.ok(res.stdout.trimEnd().split('\n').length <= 80);
-    assert.ok(HEADER.test(res.stdout.split('\n')[0]), res.stdout.slice(0, 200));
+    assert.equal(res.stdout.split('\n')[0], start(res.log));
+    assert.ok(HEADER.test(res.stdout.split('\n')[1]), res.stdout.slice(0, 300));
     assert.equal(fs.statSync(res.log).size, 50 * MB);
   });
 

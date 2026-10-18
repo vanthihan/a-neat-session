@@ -2,7 +2,8 @@
 
 // `neat filter <run-id> <test|build|install> <log>`: the right-hand side of
 // the pipe the PreToolUse hook builds. It writes every input byte to the log
-// in the run's logs dir and prints either the short output as it is or a
+// in the run's logs dir, prints the log path at once and, at the end of the
+// input, either the short output as it is or a
 // header, the failure-relevant lines with a little context and the last
 // lines. It always reads its input to the end, never writes to stderr and
 // always exits 0: under `set -o pipefail` the command's own exit code is the
@@ -41,7 +42,8 @@ function cut(line) {
 }
 
 // Bounded-memory summary state: fed decoded text, finished once at EOF.
-function createSummarizer(logPath) {
+// A trimmed summary is at most `maxChars` characters.
+function createSummarizer(logPath, { maxChars = MAX_TOTAL_CHARS } = {}) {
   let pending = '';
   let total = 0;
   let head = [];
@@ -107,7 +109,7 @@ function createSummarizer(logPath) {
     const header = `[neat] output trimmed to failure-relevant lines (${total} lines total); exit code unchanged; full log: ${logPath}`;
     const lastLines = (matched.length > 0 ? tail.slice(-TAIL_WITH_MATCHES) : tail).map(cut);
     const out = [header, ...matched, '--- last lines ---', ...lastLines].join('\n');
-    return `${out.length > MAX_TOTAL_CHARS ? out.slice(0, out.lastIndexOf('\n', MAX_TOTAL_CHARS)) : out}\n`;
+    return `${out.length > maxChars ? out.slice(0, out.lastIndexOf('\n', maxChars)) : out}\n`;
   }
 
   return { push, finish };
@@ -198,9 +200,13 @@ function main(argv = []) {
     process.exitCode = 0;
     return;
   }
+  // Named right away: if the command is killed before its output ends (a
+  // tool timeout, an interrupt) the summary never comes, but this line has.
+  const start = `[neat] filtering output; full log: ${sink.log}\n`;
+  write(start);
   const writeLog = makeWriter(sink.fd);
   const decoder = new StringDecoder('utf8');
-  const summary = createSummarizer(sink.log);
+  const summary = createSummarizer(sink.log, { maxChars: MAX_TOTAL_CHARS - start.length });
   let summaryOk = true;
   drain(0, (chunk) => {
     writeLog(chunk);
