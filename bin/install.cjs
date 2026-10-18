@@ -59,6 +59,13 @@ async function main(argv) {
   const result = install({ scope, target, payloadDir: PAYLOAD_DIR, force: opts.force });
   warnAll(result.warnings);
   out(`a-neat-session: installed ${result.files.length} files into ${target}`);
+  if (result.skipped.length > 0) {
+    process.stderr.write(
+      `a-neat-session: incomplete install: skipped ${result.skipped.length} files (see warnings); ` +
+        'remove them or re-run with --force\n',
+    );
+    return 1;
+  }
   out(RESTART_LINE);
   return 0;
 }

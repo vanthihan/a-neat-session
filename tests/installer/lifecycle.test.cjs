@@ -213,13 +213,32 @@ describe('install and upgrade', () => {
     const foreign = path.join(target, 'agents', 'neat-explorer.md');
     fs.mkdirSync(path.dirname(foreign), { recursive: true });
     fs.writeFileSync(foreign, 'mine\n');
-    const res = installOk();
+    const res = run(['--local']);
+    assert.equal(res.status, 1, 'a partly foreign install must not report success');
+    assert.match(res.stderr, /^a-neat-session: incomplete install: skipped 1 files /m);
+    assert.ok(!res.stdout.includes('Restart Claude Code'));
     assert.deepEqual(warnings(res.stderr), [
       'skipped agents/neat-explorer.md: exists and is not owned by a-neat-session (use --force to replace)',
     ]);
     assert.equal(fs.readFileSync(foreign, 'utf8'), 'mine\n');
     assert.ok(!('agents/neat-explorer.md' in manifest().files));
     assert.ok(!manifest().dirsCreated.includes('agents'));
+  });
+
+  test('foreign helper aborts the install before any write or permission rule', () => {
+    const helper = path.join(target, 'neat', 'bin', 'neat.cjs');
+    fs.mkdirSync(path.dirname(helper), { recursive: true });
+    fs.writeFileSync(helper, 'console.log("ATTACKER");\n');
+    const before = snapshot(proj);
+    const res = run(['--local']);
+    assert.equal(res.status, 1);
+    assert.match(res.stderr, /helper files exist and are not owned by a-neat-session: neat\/bin\/neat\.cjs; nothing was installed/);
+    assert.deepEqual(snapshot(proj), before);
+    assert.ok(!fs.existsSync(path.join(target, 'settings.local.json')));
+
+    installOk(['--force']);
+    assert.equal(fs.readFileSync(`${helper}.neat-old`, 'utf8'), 'console.log("ATTACKER");\n');
+    assert.ok('neat/bin/neat.cjs' in manifest().files);
   });
 
   test('--force replaces a foreign file after saving it', () => {
@@ -260,7 +279,8 @@ describe('install and upgrade', () => {
     const link = path.join(target, 'commands', 'neat', 'status.md');
     fs.rmSync(link);
     fs.symlinkSync(outside, link);
-    const res = installOk(['--force']);
+    const res = run(['--local', '--force']);
+    assert.equal(res.status, 1);
     assert.equal(warnings(res.stderr).length, 1);
     assert.match(warnings(res.stderr)[0], /^skipped commands\/neat\/status\.md: not a regular file/);
     assert.equal(fs.readFileSync(outside, 'utf8'), 'outside\n');
