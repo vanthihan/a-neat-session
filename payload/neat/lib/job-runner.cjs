@@ -188,4 +188,46 @@ async function waitJobs(root, jobIds, { timeoutMs = 3600 * 1000, pollMs = POLL_M
   }
 }
 
-module.exports = { startJob, runWrapper, waitJobs };
+const CANCEL_GRACE_MS = 3000;
+const CANCEL_POLL_MS = 100;
+// How long cancel waits for a job that is already being finished by its wrapper.
+const ENDING_WAIT_MS = 1000;
+
+// Signals the job's process group; only a live job leader (pid = pgid, its
+// command line carrying the job id) is ever signalled.
+function signalGroup(record, signal) {
+  if (record.pgid !== record.pid || !jobs.isAlive(record)) return;
+  try {
+    process.kill(-record.pgid, signal);
+  } catch (err) {
+    if (err.code !== 'ESRCH') throw err;
+  }
+}
+
+async function settledRecord(root, record) {
+  const deadline = Date.now() + ENDING_WAIT_MS;
+  let current = jobs.readJob(root, record.runId, record.id) || record;
+  while (!jobs.isTerminal(current) && Date.now() < deadline) {
+    await sleep(CANCEL_POLL_MS);
+    current = jobs.readJob(root, record.runId, record.id) || current;
+  }
+  return current;
+}
+
+// Marks the job cancelled first, then stops its process group: SIGTERM, and
+// SIGKILL when the leader is still alive after `graceMs`. Resolves
+// { record, cancelled } (cancelled false when the job had already ended).
+async function cancelJob(root, jobId, { graceMs = CANCEL_GRACE_MS } = {}) {
+  const found = jobs.findJob(root, jobId);
+  if (jobs.isTerminal(found)) return { record: found, cancelled: false };
+  if (!jobs.claimEnd(root, found)) return { record: await settledRecord(root, found), cancelled: false };
+  const current = jobs.readJob(root, found.runId, found.id) || found;
+  const record = jobs.writeJob(root, { ...current, status: 'cancelled', endedAt: nowIso() });
+  signalGroup(record, 'SIGTERM');
+  const deadline = Date.now() + graceMs;
+  while (jobs.isAlive(record) && Date.now() < deadline) await sleep(CANCEL_POLL_MS);
+  signalGroup(record, 'SIGKILL');
+  return { record, cancelled: true };
+}
+
+module.exports = { startJob, runWrapper, waitJobs, cancelJob };

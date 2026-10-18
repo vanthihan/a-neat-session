@@ -125,14 +125,28 @@ function isTerminal(record) {
   return Boolean(record) && TERMINAL.includes(record.status);
 }
 
-// kill -0 on the recorded pid; EPERM still means the process exists.
-function isAlive(record) {
-  if (!record || !Number.isInteger(record.pid) || record.pid <= 0) return false;
+function pidExists(pid) {
   try {
-    process.kill(record.pid, 0);
+    process.kill(pid, 0);
     return true;
   } catch (err) {
     return err.code === 'EPERM';
+  }
+}
+
+// kill -0 on the recorded pid (EPERM still means the process exists). Where
+// /proc exists, /proc/<pid>/cmdline must also carry the job id, so
+// a reused pid or a zombie never reads as the job. Only liveness is checked:
+// a terminal status in the record wins over it (see isTerminal).
+function isAlive(record, { procDir = '/proc' } = {}) {
+  if (!record || !Number.isInteger(record.pid) || record.pid <= 1) return false;
+  if (!pidExists(record.pid)) return false;
+  if (!fs.existsSync(procDir)) return true;
+  try {
+    const argv = fs.readFileSync(path.join(procDir, String(record.pid), 'cmdline'), 'utf8').split('\0');
+    return argv.includes(record.id);
+  } catch {
+    return false;
   }
 }
 
@@ -170,5 +184,6 @@ module.exports = {
   listJobs,
   isTerminal,
   isAlive,
+  claimEnd,
   finishJob,
 };

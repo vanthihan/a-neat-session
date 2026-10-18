@@ -1,6 +1,6 @@
 'use strict';
 
-// `neat codex <verb>`: detect, run, wait, result, plus the internal `_exec`
+// `neat codex <verb>`: detect, run, wait, result, cancel, plus the internal `_exec`
 // wrapper started by `run`. Async verbs return a Promise of the exit code.
 
 const { UsageError } = require('./cli-args.cjs');
@@ -15,7 +15,8 @@ const HELP_LINES = Object.freeze([
   'neat codex detect',
   'neat codex run <run-id> <worker> [--sandbox read-only|workspace-write]',
   'neat codex wait <job-id>... [--timeout <seconds>]',
-  'neat codex result [<job-id>]',
+  'neat codex result [<job-id>] [--stdin]',
+  'neat codex cancel <job-id> [--stdin]',
 ]);
 
 const EXIT_RUNNING = 3;
@@ -105,15 +106,28 @@ async function cmdWait(args, io) {
   return timedOut ? EXIT_RUNNING : 0;
 }
 
-function cmdResult(args, io) {
-  if (args.length > 1) throw new UsageError('usage: neat codex result [<job-id>]');
-  const root = rootOf(io);
-  let record;
-  if (args.length === 1) record = jobs.findJob(root, args[0]);
-  else {
-    record = jobs.latestJob(root);
-    if (!record) throw new UsageError('no codex jobs');
+// The job id from `<job-id>` or `--stdin` (first non-empty line); null when
+// none was given. Every id is checked against the job id pattern.
+function jobIdArg(args, io, usage) {
+  if (args.length > 1) throw new UsageError(usage);
+  if (args.length === 0) return null;
+  let id = args[0];
+  if (id === '--stdin') {
+    const line = io.readStdin().split(/\r?\n/).map((l) => l.trim()).find((l) => l !== '');
+    if (line === undefined) return null;
+    id = line;
+  } else if (id.startsWith('-')) {
+    throw new UsageError(`unknown flag ${id}`);
   }
+  jobs.assertJobId(id);
+  return id;
+}
+
+function cmdResult(args, io) {
+  const id = jobIdArg(args, io, 'usage: neat codex result [<job-id>] [--stdin]');
+  const root = rootOf(io);
+  const record = id === null ? jobs.latestJob(root) : jobs.findJob(root, id);
+  if (!record) throw new UsageError('no codex jobs');
   if (!jobs.isTerminal(record)) {
     io.out(`job ${record.id} status=${record.status}`);
     return EXIT_RUNNING;
@@ -121,6 +135,19 @@ function cmdResult(args, io) {
   const { file, text } = codexResult.writeResult(root, record);
   io.out(text.trimEnd());
   io.out(`report: ${file}`);
+  return 0;
+}
+
+async function cmdCancel(args, io) {
+  const id = jobIdArg(args, io, 'usage: neat codex cancel <job-id> [--stdin]');
+  const root = rootOf(io);
+  if (id === null) {
+    const running = jobs.listJobs(root).filter((r) => r.status === 'running').map((r) => r.id);
+    const list = running.length > 0 ? `running: ${running.join(' ')}` : 'no running jobs';
+    throw new UsageError(`usage: neat codex cancel <job-id> [--stdin] (${list})`);
+  }
+  const { record, cancelled } = await runner.cancelJob(root, id);
+  io.out(cancelled ? `job ${record.id} cancelled` : `job ${record.id} already ${record.status}`);
   return 0;
 }
 
@@ -137,10 +164,11 @@ const VERBS = Object.freeze({
   run: cmdRun,
   wait: cmdWait,
   result: cmdResult,
+  cancel: cmdCancel,
   _exec: cmdExec,
 });
 
-// io: { out(line), env, cwd }.
+// io: { out(line), env, cwd, readStdin() }.
 function dispatchCodex(args, io) {
   const [verb, ...rest] = args;
   const handler = Object.prototype.hasOwnProperty.call(VERBS, verb) ? VERBS[verb] : null;
