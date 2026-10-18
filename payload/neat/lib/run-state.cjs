@@ -5,7 +5,10 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { UsageError } = require('./cli-args.cjs');
 
-const PIPELINE = ['explore', 'plan', 'implement', 'review', 'test', 'docs'];
+const PIPELINE = Object.freeze(['explore', 'plan', 'implement', 'review', 'test', 'docs']);
+const STAGES = Object.freeze([...PIPELINE, 'done', 'cancelled']);
+const WORKER_NAME = /^(explorer|reviewer|tester|implementer-T\d+|docs-D\d+)$/;
+const WORKER_STATUSES = Object.freeze(['running', 'done', 'failed', 'report-invalid']);
 const RUN_ID = /^\d{8}-\d{6}-[a-z0-9-]{1,48}$/;
 const RUN_FILE_NAME = /^[a-z][A-Za-z0-9-]*\.(md|txt|patch|json)$/;
 const MAX_FILE_NAME = 80;
@@ -131,6 +134,53 @@ function saveRun(root, state, now = currentTime()) {
   return next;
 }
 
+function assertOneOf(kind, value, allowed) {
+  if (!allowed.includes(value)) {
+    throw new UsageError(`invalid ${kind} '${value}' (use ${allowed.join('|')})`);
+  }
+}
+
+// Pure: returns a new state with `stage` running (or the run finished).
+function setStage(state, stage) {
+  assertOneOf('stage', stage, STAGES);
+  const terminal = stage === 'done' || stage === 'cancelled';
+  const stages = state.stages.map((s) => {
+    if (s.status === 'running') return { ...s, status: stage === 'cancelled' ? 'cancelled' : 'done' };
+    if (!terminal && s.name === stage) return { ...s, status: 'running' };
+    return { ...s };
+  });
+  return { ...state, stage, stages };
+}
+
+// Pure: adds or updates the worker entry `name`.
+function setWorker(state, name, status, report) {
+  if (typeof name !== 'string' || !WORKER_NAME.test(name)) {
+    throw new UsageError(`invalid worker name '${name}' (use explorer|reviewer|tester|implementer-T<n>|docs-D<n>)`);
+  }
+  assertOneOf('worker status', status, WORKER_STATUSES);
+  const workers = Array.isArray(state.workers) ? state.workers : [];
+  const existing = workers.find((w) => w.name === name);
+  const entry = { name, status, report: report || (existing && existing.report) || null };
+  const next = existing
+    ? workers.map((w) => (w.name === name ? entry : { ...w }))
+    : [...workers.map((w) => ({ ...w })), entry];
+  return { ...state, workers: next };
+}
+
+// Newest first by id; a run whose state cannot be parsed is reported, not thrown.
+function listRuns(root) {
+  return listRunIds(root)
+    .sort()
+    .reverse()
+    .map((id) => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(runDir(root, id), 'state.json'), 'utf8'));
+      } catch {
+        return { id, error: 'unreadable state' };
+      }
+    });
+}
+
 function assertRunFileName(name) {
   const ok = typeof name === 'string' && name.length <= MAX_FILE_NAME
     && name !== 'state.json' && RUN_FILE_NAME.test(name);
@@ -149,6 +199,9 @@ function writeRunFile(root, id, name, content) {
 
 module.exports = {
   PIPELINE,
+  STAGES,
+  WORKER_NAME,
+  WORKER_STATUSES,
   projectRoot,
   runsDir,
   runDir,
@@ -159,5 +212,8 @@ module.exports = {
   createRun,
   loadRun,
   saveRun,
+  setStage,
+  setWorker,
+  listRuns,
   writeRunFile,
 };
