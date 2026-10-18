@@ -84,6 +84,16 @@ test('parsePlan rejects paths that escape the repo', () => {
   assert.deepEqual(errorsOf(planOf(task('T1', 'a/../../x'), task('D1', 'README.md'))), ['T1: path escapes repo: a/../../x']);
 });
 
+test('parsePlan rejects .claude/ paths and .git or .neat segments at any depth', () => {
+  for (const owned of [
+    '.claude/neat/bin/neat.cjs', '.claude/settings.local.json', '.Claude/settings.json',
+    'sub/.git/hooks/pre-commit', 'sub/.GIT/config', 'pkg/.neat/runs/x',
+  ]) {
+    assert.deepEqual(errorsOf(planOf(task('T1', owned), task('D1', 'README.md'))), [`T1: path not allowed: ${owned}`]);
+  }
+  assert.deepEqual(errorsOf(planOf(task('T1', 'docs/.claude/notes.md, a.gitignore'), task('D1', 'README.md'))), []);
+});
+
 test('parsePlan rejects paths under .neat/ and .git/', () => {
   assert.deepEqual(errorsOf(planOf(task('T1', '.neat/x'), task('D1', 'README.md'))), ['T1: path not allowed: .neat/x']);
   assert.deepEqual(errorsOf(planOf(task('T1', '.git/config'), task('D1', 'README.md'))), ['T1: path not allowed: .git/config']);

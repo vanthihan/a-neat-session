@@ -15,7 +15,10 @@ const runState = require('./run-state.cjs');
 const TASK_HEADING = /^## ([TD]\d+): (.+)$/;
 const KEY_LINE = /^\s*(worker|owns|do):\s?(.*)$/;
 const WORKER_FOR_PREFIX = Object.freeze({ T: 'implementer', D: 'docs' });
-const RESERVED_DIRS = Object.freeze(['.neat', '.git']);
+// `.claude` holds the pre-authorized helper and the permission settings; `.git`
+// and `.neat` are refused at any depth (nested repositories, run state).
+const RESERVED_TOP = Object.freeze(['.claude']);
+const RESERVED_ANYWHERE = Object.freeze(['.neat', '.git']);
 const MAX_ERROR_LINES = 10;
 
 function newTask(id, title) {
@@ -61,8 +64,10 @@ function checkPath(raw) {
   const norm = path.posix.normalize(raw);
   if (norm === '..' || norm.startsWith('../')) return { error: `path escapes repo: ${raw}` };
   if (norm === '.' || norm === '') return { error: `path must name a file: ${raw}` };
-  const top = norm.split('/')[0].toLowerCase();
-  if (RESERVED_DIRS.includes(top)) return { error: `path not allowed: ${raw}` };
+  const segs = norm.toLowerCase().split('/');
+  if (RESERVED_TOP.includes(segs[0]) || segs.some((s) => RESERVED_ANYWHERE.includes(s))) {
+    return { error: `path not allowed: ${raw}` };
+  }
   return { path: norm };
 }
 
