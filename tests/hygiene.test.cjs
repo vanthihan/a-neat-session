@@ -48,6 +48,10 @@ test('shipped files come from npm pack and exclude tests and planning files', ()
   assert.deepEqual(leaked, []);
 });
 
+test('README.md ships with the package, so the scans below cover it', () => {
+  assert.ok(shipped().includes('README.md'), `README.md missing from ${shipped().join(', ')}`);
+});
+
 test('no shipped file names a denylisted term', () => {
   const terms = loadDenylist(DENYLIST);
   const hits = [];
