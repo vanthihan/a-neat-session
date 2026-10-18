@@ -9,6 +9,7 @@ const { REPO_ROOT, makeTempDir, removeDir } = require('../support/helpers.cjs');
 const {
   checkReport,
   checkReportFile,
+  checkReportText,
   REPORT_HEADINGS,
   MAX_REPORT_WORDS,
   REPORT_STATUSES,
@@ -156,4 +157,20 @@ test('checkReportFile reports a missing file', () => {
   const res = checkReportFile(path.join(runDir, 'report-nope.md'));
   assert.equal(res.ok, false);
   assert.match(res.errors[0], /^report not found: /);
+});
+
+test('checkReportText adds missing-artifact errors resolved against the given dir', () => {
+  fs.writeFileSync(path.join(runDir, 'text-map.md'), 'a.js:1 - x\n');
+  assert.deepEqual(checkReportText(report({ artifacts: '- text-map.md' }), runDir), { ok: true, errors: [], words: 22 });
+  const res = checkReportText(report({ artifacts: '- text-gone.md' }), runDir);
+  assert.equal(res.ok, false);
+  assert.deepEqual(res.errors, [`artifact not found: ${path.join(runDir, 'text-gone.md')}`]);
+});
+
+test('checkReportText keeps the checkReport errors first', () => {
+  const res = checkReportText(report({ status: 'maybe', artifacts: '- text-gone.md' }), runDir);
+  assert.deepEqual(res.errors, [
+    'status must be one of done|partial|blocked|failed',
+    `artifact not found: ${path.join(runDir, 'text-gone.md')}`,
+  ]);
 });

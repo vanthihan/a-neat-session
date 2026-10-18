@@ -75,6 +75,13 @@ describe('SessionStart hook through a local install', () => {
     assert.deepEqual(manifest.settings.added, [
       { path: ['permissions', 'allow'], value: `Bash(node ${helper} *)` },
       { path: ['hooks', 'SessionStart'], value: hookEntryFor(helper) },
+      {
+        path: ['hooks', 'SubagentStop'],
+        value: {
+          matcher: 'neat-explorer|neat-researcher|neat-implementer|neat-reviewer|neat-tester|neat-docs',
+          hooks: [{ type: 'command', command: `node ${helper} hook subagent-stop`, timeout: 30 }],
+        },
+      },
     ]);
     hookCommand = settings.hooks.SessionStart[0].hooks[0].command;
   });
