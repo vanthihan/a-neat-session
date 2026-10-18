@@ -10,6 +10,7 @@
 //   FAKE_CODEX_EXIT          exit code (default 0)
 //   FAKE_CODEX_OUTPUT        text written to the -o file on success
 //   FAKE_CODEX_STDERR        stderr text on failure
+//   FAKE_CODEX_IGNORE_TERM   when set, SIGTERM is ignored
 // Like the real CLI it echoes the prompt on stderr.
 
 const fs = require('node:fs');
@@ -35,6 +36,7 @@ const DEFAULT_OUTPUT = [
 const DEFAULT_STDERR = 'ERROR: unexpected status 401 Unauthorized';
 
 const argv = process.argv.slice(2);
+if (process.env.FAKE_CODEX_IGNORE_TERM) process.on('SIGTERM', () => {});
 const log = process.env.FAKE_CODEX_LOG;
 
 function record(stdin) {

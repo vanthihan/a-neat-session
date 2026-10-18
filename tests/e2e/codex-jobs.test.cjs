@@ -323,6 +323,21 @@ test('timeout, result while running, then cancel stops the whole group', () => {
   assert.deepEqual([again.status, again.stdout], [0, `job ${job} already cancelled\n`]);
 });
 
+test('cancel kills a codex that ignores SIGTERM once the wrapper is gone', () => {
+  fs.rmSync(log, { force: true });
+  const extra = { FAKE_CODEX_DELAY_MS: '30000', FAKE_CODEX_IGNORE_TERM: '1' };
+  const { dir, job, pid } = startReviewer('stubborn codex', extra);
+  const codexPid = codexPidFor(dir);
+  assert.ok(codexPid, 'fake codex must have started');
+  try {
+    const res = neat(['codex', 'cancel', job]);
+    assert.deepEqual([res.status, res.stdout], [0, `job ${job} cancelled\n`]);
+    assert.ok(until(() => !alive(pid) && !alive(codexPid), 2000), 'codex must not survive the cancel');
+  } finally {
+    if (alive(codexPid)) process.kill(codexPid, 'SIGKILL');
+  }
+});
+
 test('cancel on a finished job sends nothing', () => {
   const { job } = startReviewer('finished job');
   assert.match(waitJob(job).line, /status=done/);

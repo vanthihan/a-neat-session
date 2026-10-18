@@ -280,15 +280,36 @@ const CANCEL_POLL_MS = 100;
 // How long cancel waits for a job that is already being finished by its wrapper.
 const ENDING_WAIT_MS = 1000;
 
-// Signals the job's process group; only a live job leader (pid = pgid, its
-// command line carrying the job id) is ever signalled.
-function signalGroup(record, signal) {
-  if (record.pgid !== record.pid || !jobs.isAlive(record)) return;
+function signalGroup(pgid, signal) {
   try {
-    process.kill(-record.pgid, signal);
+    process.kill(-pgid, signal);
   } catch (err) {
     if (err.code !== 'ESRCH') throw err;
   }
+}
+
+// kill -0 on the group (EPERM still means a member exists).
+function groupExists(pgid) {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+// Stops the job's process group: SIGTERM, then SIGKILL when any member is
+// still there after `graceMs`. The leader is checked once, before SIGTERM:
+// only a live job leader (pid = pgid, its command line carrying the job) is
+// signalled. After that the group is followed, not the leader: the wrapper
+// dies on SIGTERM at once, while codex or its children may ignore it, and a
+// process group id is never reused while any member is alive.
+async function stopGroup(record, graceMs) {
+  if (record.pgid !== record.pid || !jobs.isAlive(record)) return;
+  signalGroup(record.pgid, 'SIGTERM');
+  const deadline = Date.now() + graceMs;
+  while (groupExists(record.pgid) && Date.now() < deadline) await sleep(CANCEL_POLL_MS);
+  if (groupExists(record.pgid)) signalGroup(record.pgid, 'SIGKILL');
 }
 
 async function settledRecord(root, record) {
@@ -302,7 +323,7 @@ async function settledRecord(root, record) {
 }
 
 // Marks the job cancelled first, then stops its process group: SIGTERM, and
-// SIGKILL when the leader is still alive after `graceMs`. Resolves
+// SIGKILL when any group member is still alive after `graceMs`. Resolves
 // { record, cancelled } (cancelled false when the job had already ended).
 async function cancelJob(root, jobId, { graceMs = CANCEL_GRACE_MS, env = process.env } = {}) {
   const found = jobs.findJob(root, jobId);
@@ -310,10 +331,7 @@ async function cancelJob(root, jobId, { graceMs = CANCEL_GRACE_MS, env = process
   if (!jobs.claimEnd(root, found)) return { record: await settledRecord(root, found), cancelled: false };
   const current = jobs.readJob(root, found.runId, found.id) || found;
   const record = jobs.writeJob(root, { ...current, status: 'cancelled', endedAt: nowIso() });
-  signalGroup(record, 'SIGTERM');
-  const deadline = Date.now() + graceMs;
-  while (jobs.isAlive(record) && Date.now() < deadline) await sleep(CANCEL_POLL_MS);
-  signalGroup(record, 'SIGKILL');
+  await stopGroup(record, graceMs);
   if (record.mode === 'tmux' && typeof record.tmuxTarget === 'string') {
     tmuxCmd(['kill-window', '-t', record.tmuxTarget], env); // errors ignored: the window may be gone
   }
