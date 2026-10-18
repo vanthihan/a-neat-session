@@ -2,27 +2,60 @@
 'use strict';
 
 const path = require('node:path');
+const readline = require('node:readline/promises');
+const { parseInstallerArgs, chooseScope, USAGE, InstallerUsageError } = require('../lib/installer/args.cjs');
+const { resolveTarget, helperPath, assertShellSafePath } = require('../lib/installer/paths.cjs');
 const { install } = require('../lib/installer/install.cjs');
 
-const USAGE = 'usage: a-neat-session --local';
+const PAYLOAD_DIR = path.join(__dirname, '..', 'payload');
+const RESTART_LINE =
+  'Restart Claude Code (or start a new session) to load /neat:do, /neat:status and the neat-* agents.';
 
-function fail(message, code) {
-  process.stderr.write(`a-neat-session: ${message}\n`);
-  process.exit(code);
+function out(line) {
+  process.stdout.write(`${line}\n`);
 }
 
-function main(argv) {
-  if (argv.length !== 1 || argv[0] !== '--local') fail(USAGE, 2);
-  const target = path.resolve(process.cwd(), '.claude');
-  const payloadDir = path.join(__dirname, '..', 'payload');
-  let result;
+async function askOnTerminal(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
-    result = install({ scope: 'local', target, payloadDir });
-  } catch (err) {
-    fail(`install failed: ${err.message}`, 1);
+    return await rl.question(question);
+  } finally {
+    rl.close();
   }
-  process.stdout.write(`a-neat-session: installed ${result.files.length} files into ${target}\n`);
-  process.stdout.write('Restart Claude Code (or start a new session) to load /neat:do and the neat-* agents.\n');
 }
 
-main(process.argv.slice(2));
+async function pickScope(opts) {
+  if (opts.scope) return opts.scope;
+  return chooseScope({
+    isTTY: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+    ask: askOnTerminal,
+    globalTarget: resolveTarget('global'),
+    localTarget: resolveTarget('local'),
+  });
+}
+
+async function main(argv) {
+  const opts = parseInstallerArgs(argv);
+  if (opts.help) {
+    process.stdout.write(USAGE);
+    return 0;
+  }
+  const scope = await pickScope(opts);
+  const target = resolveTarget(scope);
+  assertShellSafePath(helperPath(target));
+  out(`a-neat-session: target ${target}`);
+  const result = install({ scope, target, payloadDir: PAYLOAD_DIR, force: opts.force });
+  out(`a-neat-session: installed ${result.files.length} files into ${target}`);
+  out(RESTART_LINE);
+  return 0;
+}
+
+main(process.argv.slice(2)).then(
+  (code) => {
+    process.exitCode = code;
+  },
+  (err) => {
+    process.stderr.write(`a-neat-session: ${err.message}\n`);
+    process.exitCode = err instanceof InstallerUsageError ? 2 : 1;
+  },
+);
