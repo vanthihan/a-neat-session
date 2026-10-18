@@ -97,10 +97,11 @@ function isIgnored(root, rel) {
   }
 }
 
-// Content fingerprint of `rel` under `root`: a sha256 of a regular file, the
-// target of a symlink, or a sentinel for a missing path or a directory.
+// Content fingerprint of `rel` under `root` (or of an absolute path): a sha256
+// of a regular file, the target of a symlink, or a sentinel for a missing path
+// or a directory.
 function fingerprint(root, rel) {
-  const abs = path.join(root, rel);
+  const abs = path.resolve(root, rel);
   let st;
   try {
     st = fs.lstatSync(abs);

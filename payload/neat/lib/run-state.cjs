@@ -5,6 +5,7 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { UsageError } = require('./cli-args.cjs');
 const gitLib = require('./git.cjs');
+const protect = require('./protect.cjs');
 
 const PIPELINE = Object.freeze(['explore', 'research', 'plan', 'implement', 'review', 'test', 'docs']);
 const STAGES = Object.freeze([...PIPELINE, 'done', 'cancelled']);
@@ -103,13 +104,20 @@ function writeState(root, state) {
   atomicWrite(file, `${JSON.stringify(state, null, 2)}\n`);
 }
 
-// Git baseline of a run: SHAs, paths already dirty and their content
-// fingerprints (null/null/[]/{} outside git).
+// Git baseline of a run: SHAs, paths already dirty, their content
+// fingerprints and the protected files' fingerprints (null/null/[]/{} and no
+// protected record outside git).
 function gitBaseline(root) {
   if (!gitLib.isGitRepo(root)) return { baseSha: null, headSha: null, dirtyAtStart: [], hashes: {} };
   const sha = gitLib.headSha(root);
   const dirty = gitLib.porcelainPaths(root);
-  return { baseSha: sha, headSha: sha, dirtyAtStart: dirty, hashes: gitLib.fingerprints(root, dirty) };
+  return {
+    baseSha: sha,
+    headSha: sha,
+    dirtyAtStart: dirty,
+    hashes: gitLib.fingerprints(root, dirty),
+    protected: protect.snapshot(root),
+  };
 }
 
 function createRun(root, { task, mode, profile, research }, now = currentTime()) {

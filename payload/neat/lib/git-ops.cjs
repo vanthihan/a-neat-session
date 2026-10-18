@@ -8,6 +8,7 @@
 const runState = require('./run-state.cjs');
 const gitLib = require('./git.cjs');
 const { isReservedPath } = require('./plan-check.cjs');
+const protect = require('./protect.cjs');
 
 const LITERAL = '--literal-pathspecs';
 const MAX_SUBJECT = 60;
@@ -48,6 +49,15 @@ function headViolation(root, state) {
   const current = gitLib.headSha(root);
   if (current === (state.headSha || null)) return null;
   return `HEAD moved (expected ${short(state.headSha)}, got ${short(current)})`;
+}
+
+// Protected files (outside the git status view) changed since the previous
+// guard, or since `run new` for the first guard. A run created before the
+// protected record existed has none to compare.
+function protectedCheck(root, state) {
+  if (!state.protected) return { seen: undefined, changed: [] };
+  const seen = protect.snapshot(root);
+  return { seen, changed: protect.changedPaths(state.protectedSeen || state.protected, seen) };
 }
 
 function violationText(file, taskIds) {
@@ -99,7 +109,9 @@ function touchedPaths(known, before, current) {
 // its tasks' files. A guarded change that a non-owner edits again moves from
 // `changed` to `unowned`, so `commitRun` never commits it. Untracked files new
 // during the test stage become `generated`: noted, known to later guards and
-// never committed. Records results in state.json.
+// never committed. A changed protected file (git hooks and config, the
+// installed helper, permission settings) is a violation. Records results in
+// state.json.
 function guardRun(root, id, taskIds = [], now) {
   const state = runState.loadRun(root, id);
   if (!gitLib.isGitRepo(root)) return { ok: true, lines: ['guard skip: not a git repository'] };
@@ -117,6 +129,8 @@ function guardRun(root, id, taskIds = [], now) {
   const messages = [];
   const head = headViolation(root, state);
   if (head) messages.push(head);
+  const outside = protectedCheck(root, state);
+  outside.changed.forEach((p) => messages.push(`protected file changed: ${p}`));
   const owned = fresh.filter((p) => allowed.has(p));
   const foreign = fresh.filter((p) => !allowed.has(p));
   const tampered = touched.filter((p) => !allowed.has(p));
@@ -129,6 +143,7 @@ function guardRun(root, id, taskIds = [], now) {
     unowned: union([list(state, 'unowned'), foreign, [...tainted]]),
     generated: union([prevGenerated, generated]),
     hashes: { ...before, ...current, ...gitLib.fingerprints(root, [...fresh, ...generated]) },
+    protectedSeen: outside.seen,
     violations: [...list(state, 'violations'), ...messages.map((message) => ({ stage: state.stage, message, at }))],
   };
   runState.saveRun(root, next, now);
@@ -210,6 +225,10 @@ function commitRun(root, id, now) {
   const state = runState.loadRun(root, id);
   if (!gitLib.isGitRepo(root)) return { ok: true, lines: ['commit skip: not a git repository'] };
   if (headViolation(root, state)) return { ok: false, lines: ['commit refused: HEAD moved'] };
+  const blockers = state.protected ? protect.commitBlockers(root, state.protected, protect.snapshot(root)) : [];
+  if (blockers.length > 0) {
+    return { ok: false, lines: [`commit refused: ${blockers.join(', ')} changed during the run`] };
+  }
   const dirty = new Set(list(state, 'dirtyAtStart'));
   const present = new Set(gitLib.porcelainPaths(root));
   const candidates = list(state, 'changed').filter((p) => !dirty.has(p) && present.has(p));

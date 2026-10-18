@@ -163,6 +163,11 @@ describe('neat-researcher', () => {
     assert.match(role, /`partial`/);
     assert.match(role, /`blocked`/);
   });
+
+  test('role forbids writes outside the run dir and names what the guard checks', () => {
+    assert.match(role, /Never write outside the run dir/);
+    assert.match(role, /Git hooks and config, permission settings/);
+  });
 });
 
 test('explorer lists questions the repository cannot answer as research: open questions', () => {

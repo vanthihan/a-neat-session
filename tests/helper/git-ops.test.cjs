@@ -360,11 +360,11 @@ function failingHook(dir) {
 
 test('a commit rejected by a hook leaves the index as it was', { skip: process.platform === 'win32' }, () => {
   const dir = makeRepo();
+  failingHook(dir);
   const run = plannedRun(dir);
   write(dir, 'a.js', 'two\n');
   write(dir, 'new.js', 'brand new\n');
   assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
-  failingHook(dir);
   const before = head(dir);
   const res = neat(dir, ['run', 'commit', run.id]);
   assert.equal(res.status, 1);
@@ -380,12 +380,13 @@ test('a rejected first commit on an unborn branch leaves the index empty', { ski
   git(dir, ['init', '-q']);
   git(dir, ['config', 'user.name', 'Neat Test']);
   git(dir, ['config', 'user.email', 'neat@example.invalid']);
+  failingHook(dir);
   const run = plannedRun(dir);
   write(dir, 'a.js', 'first\n');
   assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
-  failingHook(dir);
   const res = neat(dir, ['run', 'commit', run.id]);
   assert.equal(res.status, 1);
+  assert.match(res.stdout, /^commit failed$/m);
   assert.equal(git(dir, ['ls-files', '--cached']), '');
   assert.ok(fs.existsSync(path.join(dir, 'a.js')));
 });
@@ -555,4 +556,111 @@ test('later guards ignore generated files and commit leaves them untracked', () 
   const files = git(dir, ['show', '--name-only', '--format=', 'HEAD']).trim().split('\n').sort();
   assert.deepEqual(files, ['README.md', 'a.js']);
   assert.match(git(dir, ['status', '--porcelain']), /^\?\? coverage\/$/m);
+});
+
+// ---------- protected files outside the git status view ----------
+
+function markerHook(dir, marker) {
+  const hook = path.join(dir, '.git', 'hooks', 'pre-commit');
+  fs.mkdirSync(path.dirname(hook), { recursive: true });
+  fs.writeFileSync(hook, `#!/bin/sh\necho ran > "${marker}"\n`, { mode: 0o755 });
+  return hook;
+}
+
+test('research stage: a git hook planted by a worker is a guard violation and blocks the commit', { skip: process.platform === 'win32' }, () => {
+  const dir = makeRepo();
+  const run = newRun(dir);
+  assert.equal(neat(dir, ['stages', run.id, '--type', 'feature', '--research']).status, 0);
+  assert.match(neat(dir, ['run', 'stage', run.id, 'research']).stdout, /^stage research$/m);
+  const marker = path.join(plainDir(), 'hook-ran');
+  const hook = markerHook(dir, marker);
+  const res = neat(dir, ['run', 'guard', run.id]);
+  assert.equal(res.status, 1, res.stdout);
+  assert.ok(res.stdout.split('\n').includes(`guard violation: protected file changed: ${fs.realpathSync(hook)}`)
+    || res.stdout.split('\n').includes(`guard violation: protected file changed: ${hook}`), res.stdout);
+  // Reported once: the next guard compares against what the last guard saw.
+  assert.equal(neat(dir, ['run', 'guard', run.id]).status, 0);
+
+  fs.writeFileSync(path.join(run.runDir, 'plan.md'), PLAN);
+  assert.equal(neat(dir, ['plan', 'check', run.id]).status, 0);
+  neat(dir, ['run', 'stage', run.id, 'implement']);
+  write(dir, 'a.js', 'two\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  const before = head(dir);
+  const commit = neat(dir, ['run', 'commit', run.id]);
+  assert.equal(commit.status, 1);
+  assert.match(commit.stdout, /^commit refused: .*pre-commit changed during the run$/m);
+  assert.equal(head(dir), before);
+  assert.equal(fs.existsSync(marker), false, 'the planted hook ran');
+});
+
+test('a git config change during the run is a violation and blocks the commit', () => {
+  const dir = makeRepo();
+  const run = plannedRun(dir);
+  write(dir, 'a.js', 'two\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  git(dir, ['config', 'core.hooksPath', 'elsewhere']);
+  const res = neat(dir, ['run', 'guard', run.id]);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /^guard violation: protected file changed: .*config$/m);
+  const commit = neat(dir, ['run', 'commit', run.id]);
+  assert.equal(commit.status, 1);
+  assert.match(commit.stdout, /^commit refused: .*config changed during the run$/m);
+});
+
+test('an ignored permission settings file changed during the run is a violation but does not block the commit', () => {
+  const dir = makeRepo({ gitignore: '.claude/\n' });
+  const run = plannedRun(dir);
+  write(dir, 'a.js', 'two\n');
+  write(dir, '.claude/settings.local.json', '{"permissions":{"allow":["Bash(*)"]}}');
+  const res = neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']);
+  assert.equal(res.status, 1);
+  const settings = path.join(dir, '.claude', 'settings.local.json');
+  assert.ok(res.stdout.split('\n').includes(`guard violation: protected file changed: ${settings}`), res.stdout);
+  assert.equal(stateOf(run).violations.length, 1);
+  const commit = neat(dir, ['run', 'commit', run.id]);
+  assert.match(commit.stdout, /^committed [0-9a-f]{7} files=1$/m);
+});
+
+test('a run without a protected record skips the protected check', () => {
+  const dir = makeRepo();
+  const run = plannedRun(dir);
+  const file = path.join(run.runDir, 'state.json');
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete state.protected;
+  fs.writeFileSync(file, JSON.stringify(state));
+  git(dir, ['config', 'core.hooksPath', 'elsewhere']);
+  write(dir, 'a.js', 'two\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  assert.match(neat(dir, ['run', 'commit', run.id]).stdout, /^committed [0-9a-f]{7} files=1$/m);
+});
+
+test('the protected snapshot covers git hooks and config, the helper, agents, commands and settings', () => {
+  const protect = require(path.join(REPO_ROOT, 'payload', 'neat', 'lib', 'protect.cjs'));
+  const dir = makeRepo();
+  failingHook(dir);
+  // In-process git: isolate it from the developer's global config (core.hooksPath).
+  const saved = { ...process.env };
+  Object.assign(process.env, { GIT_CONFIG_GLOBAL: path.join(scratch, 'empty-gitconfig'), GIT_CONFIG_NOSYSTEM: '1' });
+  let keys;
+  try {
+    keys = Object.keys(protect.snapshot(dir, { CLAUDE_CONFIG_DIR: scratch }));
+  } finally {
+    for (const k of ['GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM']) {
+      if (k in saved) process.env[k] = saved[k];
+      else delete process.env[k];
+    }
+  }
+  const payload = path.join(REPO_ROOT, 'payload');
+  for (const p of [
+    path.join(dir, '.git', 'config'),
+    path.join(dir, '.git', 'hooks', 'pre-commit'),
+    HELPER,
+    path.join(payload, 'neat', 'lib', 'git-ops.cjs'),
+    path.join(payload, 'agents', 'neat-researcher.md'),
+    path.join(payload, 'commands', 'neat', 'do.md'),
+    path.join(dir, '.claude', 'settings.json'),
+    path.join(dir, '.claude', 'settings.local.json'),
+    path.join(scratch, 'settings.json'),
+  ]) assert.ok(keys.includes(p), p);
 });
