@@ -1,6 +1,6 @@
 ---
 description: Run a task through neat workers (explore, research, plan, implement, review, test, docs) so this window only receives short reports.
-argument-hint: "[--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [--research] [--] TASK"
+argument-hint: "[--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [--research] [--tmux] [--] TASK"
 allowed-tools: Bash(node {{NEAT_BIN}} *), Agent, AskUserQuestion, SendMessage
 disable-model-invocation: true
 ---

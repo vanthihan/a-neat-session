@@ -13,7 +13,7 @@ const codexResult = require('./codex-result.cjs');
 
 const HELP_LINES = Object.freeze([
   'neat codex detect',
-  'neat codex run <run-id> <worker> [--sandbox read-only|workspace-write]',
+  'neat codex run <run-id> <worker> [--sandbox read-only|workspace-write] [--tmux]',
   'neat codex wait <job-id>... [--timeout <seconds>]',
   'neat codex result [<job-id>] [--stdin]',
   'neat codex cancel <job-id> [--stdin]',
@@ -47,15 +47,19 @@ function cmdDetect(args, io) {
   return avail.required && !avail.available ? 1 : 0;
 }
 
-const RUN_USAGE = 'usage: neat codex run <run-id> <worker> [--sandbox read-only|workspace-write]';
+const RUN_USAGE = 'usage: neat codex run <run-id> <worker> [--sandbox read-only|workspace-write] [--tmux]';
 
-// <run-id> <worker> plus `--sandbox <v>` (or `--sandbox=<v>`).
+// <run-id> <worker> plus `--sandbox <v>` (or `--sandbox=<v>`) and `--tmux`.
 function runArgs(args) {
   const words = [];
   let sandbox = null;
+  let tmux = false;
   for (let i = 0; i < args.length; i += 1) {
     const a = args[i];
-    if (a === '--sandbox' || a.startsWith('--sandbox=')) {
+    if (a === '--tmux') {
+      if (tmux) throw new UsageError('--tmux given twice');
+      tmux = true;
+    } else if (a === '--sandbox' || a.startsWith('--sandbox=')) {
       if (sandbox !== null) throw new UsageError('--sandbox given twice');
       sandbox = a === '--sandbox' ? args[(i += 1)] : a.slice('--sandbox='.length);
       if (!sandbox) throw new UsageError('--sandbox needs a value');
@@ -66,14 +70,17 @@ function runArgs(args) {
     }
   }
   if (words.length !== 2) throw new UsageError(RUN_USAGE);
-  return { runId: words[0], worker: words[1], sandbox };
+  return { runId: words[0], worker: words[1], sandbox, tmux };
 }
 
 function cmdRun(args, io) {
-  const { runId, worker, sandbox } = runArgs(args);
+  const { runId, worker, sandbox, tmux } = runArgs(args);
   const root = rootOf(io);
-  const r = runner.startJob(root, { runId, worker, sandbox, env: io.env, now: runState.currentTime(io.env) });
+  const { record: r, lines } = runner.startJob(root, {
+    runId, worker, sandbox, tmux, env: io.env, now: runState.currentTime(io.env),
+  });
   io.out(`job=${r.id} worker=${r.worker} mode=${r.mode} sandbox=${r.sandbox} pid=${r.pid}`);
+  lines.forEach((line) => io.out(line));
   return 0;
 }
 
@@ -146,17 +153,18 @@ async function cmdCancel(args, io) {
     const list = running.length > 0 ? `running: ${running.join(' ')}` : 'no running jobs';
     throw new UsageError(`usage: neat codex cancel <job-id> [--stdin] (${list})`);
   }
-  const { record, cancelled } = await runner.cancelJob(root, id);
+  const { record, cancelled } = await runner.cancelJob(root, id, { env: io.env });
   io.out(cancelled ? `job ${record.id} cancelled` : `job ${record.id} already ${record.status}`);
   return 0;
 }
 
 function cmdExec(args, io) {
-  const [runId, jobId] = args;
-  if (args.length !== 2) throw new UsageError('usage: neat codex _exec <run-id> <job-id>');
+  const [runId, jobId, flag] = args;
+  const ok = args.length === 2 || (args.length === 3 && flag === '--tee');
+  if (!ok) throw new UsageError('usage: neat codex _exec <run-id> <job-id> [--tee]');
   if (!runState.isValidRunId(runId)) throw new UsageError(`invalid run id: ${runId}`);
   jobs.assertJobId(jobId);
-  return runner.runWrapper(rootOf(io), runId, jobId);
+  return runner.runWrapper(rootOf(io), runId, jobId, { tee: flag === '--tee' });
 }
 
 const VERBS = Object.freeze({

@@ -120,7 +120,7 @@ function gitBaseline(root) {
   };
 }
 
-function createRun(root, { task, mode, profile, research }, now = currentTime()) {
+function createRun(root, { task, mode, profile, research, tmux }, now = currentTime()) {
   const baseline = gitBaseline(root);
   fs.mkdirSync(runsDir(root), { recursive: true });
   const id = makeRunId(task, now, listRunIds(root));
@@ -132,6 +132,7 @@ function createRun(root, { task, mode, profile, research }, now = currentTime())
     mode,
     profile: profile || null,
     research: Boolean(research),
+    tmux: Boolean(tmux),
     stage: 'created',
     // research runs only when selected (`neat stages`), so it starts skipped.
     stages: PIPELINE.map((name) => ({ name, status: name === 'research' ? 'skipped' : 'pending' })),
