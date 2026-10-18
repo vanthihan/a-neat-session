@@ -18,6 +18,10 @@ const CODEX_GUIDE_MENTIONS = [
   'codex run', 'codex wait', 'codex result', 'codex cancel', 'action=pause', 'action=skip',
   'AskUserQuestion', 'report-invalid', 'background Bash command', 'untrusted',
 ];
+const REVIEW_GUIDE_MENTIONS = [
+  'run diff', 'reviewer-2', 'neat-reviewer', 'guide codex', 'review merge', '--fix', 'next=fix', 'next=ask',
+  'next=stop', 'AskUserQuestion', 'untrusted', 'run commit',
+];
 const MAX_DESCRIPTION = 200;
 const MAX_BODY_WORDS = 1500;
 const DO_SECTIONS = [
@@ -28,7 +32,7 @@ const DO_MENTIONS = [
   'neat-explorer', 'neat-researcher', 'neat-implementer', 'neat-reviewer', 'neat-tester', 'neat-docs',
   'propose=yes', '--research', 'Brief: ', 'subagent_type', 'AskUserQuestion', 'SendMessage', 'untrusted',
   'run commit', 'plan check', 'run guard', 'run classify', 'gate', 'auto', 'step',
-  'must not contain a line NEAT_EOF', 'skipped', 'guide codex', 'target=codex',
+  'must not contain a line NEAT_EOF', 'skipped', 'guide codex', 'target=codex', 'guide review', 'reviewer-2',
 ];
 const BIN_CALL = /node \{\{NEAT_BIN\}\}( [^`\n]*)?/g;
 
@@ -152,6 +156,23 @@ describe('do.md', () => {
     assert.match(finish, /^- the guard `note:` lines/m);
   });
 
+  test('the Review section starts the stage and follows the review guide', () => {
+    const review = body.slice(body.indexOf('## Review'), body.indexOf('## Test'));
+    assert.ok(review.includes('node {{NEAT_BIN}} run stage {id} review'), review);
+    assert.ok(review.includes('node {{NEAT_BIN}} guide review'), review);
+    assert.ok(!/do not start extra fix work/i.test(body));
+  });
+
+  test('Launch maps reviewer-2 to neat-reviewer and Finish shows merged review findings', () => {
+    const launch = lines.find((l) => l.startsWith('2. Launch:'));
+    assert.match(launch, /`neat-reviewer` for `reviewer-2`/);
+    for (const agent of ['neat-implementer', 'neat-docs', 'neat-explorer', 'neat-researcher', 'neat-reviewer', 'neat-tester']) {
+      assert.ok(launch.includes(agent), `${agent} missing from Launch`);
+    }
+    const finish = body.slice(body.indexOf('## Finish'));
+    assert.match(finish, /^- up to 3 merged review findings/m);
+  });
+
   test(`body is at most ${MAX_BODY_WORDS} words`, () => {
     const words = countWords(body);
     assert.ok(words <= MAX_BODY_WORDS, `${words} words`);
@@ -211,8 +232,22 @@ for (const { file, verb, hint } of JOB_COMMANDS) {
 }
 
 describe('guides', () => {
-  test('the codex guide ships', () => {
+  test('the codex and review guides ship', () => {
     assert.ok(guideFiles().includes('codex.md'), guideFiles().join(', '));
+    assert.ok(guideFiles().includes('review.md'), guideFiles().join(', '));
+  });
+
+  test('the review guide covers both reviewers, merge, the bounded fix loop and its stops', () => {
+    const text = fs.readFileSync(path.join(GUIDES_DIR, 'review.md'), 'utf8');
+    for (const word of REVIEW_GUIDE_MENTIONS) assert.ok(text.includes(word), `missing ${word}`);
+  });
+
+  test('neat guide review prints the guide with the absolute helper path', () => {
+    const res = runNode([HELPER, 'guide', 'review']);
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(!res.stdout.includes('{{NEAT_BIN}}'));
+    assert.ok(res.stdout.includes(`node ${HELPER} review merge`), res.stdout);
+    assert.ok(countWords(res.stdout) <= MAX_GUIDE_WORDS, `${countWords(res.stdout)} words`);
   });
 
   test('every helper call in a guide names a subcommand listed by neat help', () => {
@@ -274,7 +309,10 @@ describe('local install renders every command and agent', () => {
     assert.ok(mdFiles.length >= 7, `only ${mdFiles.length} .md files installed`);
     const left = mdFiles.filter((f) => fs.readFileSync(path.join(root, f), 'utf8').includes('{{NEAT_BIN}}'));
     assert.deepEqual(left, []);
-    assert.ok(mdFiles.map((f) => f.split(path.sep).join('/')).includes('neat/guides/codex.md'), mdFiles.join(', '));
+    const posix = mdFiles.map((f) => f.split(path.sep).join('/'));
+    for (const guideFile of ['neat/guides/codex.md', 'neat/guides/review.md']) {
+      assert.ok(posix.includes(guideFile), mdFiles.join(', '));
+    }
   });
 
   test('installed result and cancel commands name the installed helper', () => {
