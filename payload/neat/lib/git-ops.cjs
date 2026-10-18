@@ -7,12 +7,17 @@
 
 const runState = require('./run-state.cjs');
 const gitLib = require('./git.cjs');
+const { isReservedPath } = require('./plan-check.cjs');
 
 const LITERAL = '--literal-pathspecs';
 const MAX_SUBJECT = 60;
 const SHORT = 7;
 const MAX_NOTE_NAMES = 5;
 const UNTRACKED = '??';
+// Never treated as test output: CI configuration and files that change what
+// git reports to later guards.
+const NEVER_GENERATED_TOP = Object.freeze(['.github']);
+const NEVER_GENERATED_NAMES = Object.freeze(['.gitignore', '.gitattributes', '.gitmodules']);
 
 function short(sha) {
   return sha ? sha.slice(0, SHORT) : 'none';
@@ -51,12 +56,23 @@ function violationText(file, taskIds) {
     : `${file} changed during a read-only stage`;
 }
 
-// IN-11: during the test stage (read-only), paths whose every new porcelain
-// entry is untracked are files the test run generated (coverage, snapshots,
-// caches). Tracked edits, deletions and index changes stay violations.
+// A new untracked path the test stage may leave behind as output. Reserved
+// paths (helper, permission settings, run state), CI configuration, git
+// control files and paths outside the project root stay violations.
+function mayBeGenerated(p) {
+  const segs = p.toLowerCase().split('/');
+  if (segs[0] === '..' || NEVER_GENERATED_TOP.includes(segs[0])) return false;
+  if (NEVER_GENERATED_NAMES.includes(segs[segs.length - 1])) return false;
+  return !isReservedPath(p);
+}
+
+// During the test stage (read-only), paths whose every new porcelain entry is
+// untracked are files the test run generated (coverage, snapshots, caches).
+// Tracked edits, deletions, index changes and the paths `mayBeGenerated`
+// refuses stay violations.
 function generatedPaths(entries, testStage) {
   if (!testStage) return [];
-  const paths = [...new Set(entries.map((e) => e.path))];
+  const paths = [...new Set(entries.map((e) => e.path))].filter(mayBeGenerated);
   return paths.filter((p) => entries.every((e) => e.path !== p || e.xy === UNTRACKED));
 }
 

@@ -505,6 +505,24 @@ test('test stage: a tracked file removed from the index and left untracked is a 
   assert.match(res.stdout, /^guard violation: a\.js changed during a read-only stage$/m);
 });
 
+test('test stage: new files under reserved paths, CI config and git control files stay violations', () => {
+  const cases = ['.claude/settings.json', '.claude/agents/neat-implementer.md', '.github/workflows/x.yml', 'sub/.gitignore', '.gitattributes'];
+  for (const file of cases) {
+    const dir = makeRepo();
+    const run = testStageRun(dir);
+    write(dir, file, 'x\n');
+    write(dir, 'coverage/lcov.info', 'TN:\n');
+    const res = neat(dir, ['run', 'guard', run.id]);
+    assert.equal(res.status, 1, `${file}: ${res.stdout}`);
+    const escaped = file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    assert.match(res.stdout, new RegExp(`^guard violation: ${escaped} changed during a read-only stage$`, 'm'));
+    assert.doesNotMatch(res.stdout, /^guard ok/m);
+    const state = stateOf(run);
+    assert.deepEqual(state.generated, ['coverage/lcov.info'], file);
+    assert.ok(state.unowned.includes(file), file);
+  }
+});
+
 test('review stage: a new untracked file is still a violation', () => {
   const dir = makeRepo();
   const run = plannedRun(dir);

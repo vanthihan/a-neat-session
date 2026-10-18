@@ -64,6 +64,13 @@ function scanTasks(text) {
   return tasks;
 }
 
+// True for a normalised repo-relative path under a reserved directory. The
+// guard uses the same rule, so no stage can leave files there unreported.
+function isReservedPath(norm) {
+  const segs = String(norm).toLowerCase().split('/');
+  return RESERVED_TOP.includes(segs[0]) || segs.some((s) => RESERVED_ANYWHERE.includes(s));
+}
+
 // Returns { path } (normalised) or { error } for one owned path.
 function checkPath(raw) {
   if (raw.includes('\\')) return { error: `path must use forward slashes: ${raw}` };
@@ -72,10 +79,7 @@ function checkPath(raw) {
   const norm = path.posix.normalize(raw);
   if (norm === '..' || norm.startsWith('../')) return { error: `path escapes repo: ${raw}` };
   if (norm === '.' || norm === '') return { error: `path must name a file: ${raw}` };
-  const segs = norm.toLowerCase().split('/');
-  if (RESERVED_TOP.includes(segs[0]) || segs.some((s) => RESERVED_ANYWHERE.includes(s))) {
-    return { error: `path not allowed: ${raw}` };
-  }
+  if (isReservedPath(norm)) return { error: `path not allowed: ${raw}` };
   return { path: norm };
 }
 
@@ -189,4 +193,4 @@ function checkPlan(root, id, now) {
   return { ok: true, lines: [line] };
 }
 
-module.exports = { parsePlan, computeBatches, checkPlan, MAX_ERROR_LINES };
+module.exports = { parsePlan, computeBatches, checkPlan, isReservedPath, MAX_ERROR_LINES };
