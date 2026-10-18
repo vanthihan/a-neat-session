@@ -74,6 +74,7 @@ describe('SessionStart hook through a local install', () => {
     const manifest = readJson(path.join(proj, '.claude', 'neat', 'manifest.json'));
     assert.deepEqual(manifest.settings.added, [
       { path: ['permissions', 'allow'], value: `Bash(node ${helper} *)` },
+      { path: ['permissions', 'allow'], value: 'Bash(set -o pipefail)' },
       { path: ['hooks', 'SessionStart'], value: hookEntryFor(helper) },
       {
         path: ['hooks', 'SubagentStop'],
@@ -81,6 +82,10 @@ describe('SessionStart hook through a local install', () => {
           matcher: 'neat-explorer|neat-researcher|neat-implementer|neat-reviewer|neat-tester|neat-docs',
           hooks: [{ type: 'command', command: `node ${helper} hook subagent-stop`, timeout: 30 }],
         },
+      },
+      {
+        path: ['hooks', 'PreToolUse'],
+        value: { matcher: 'Bash', hooks: [{ type: 'command', command: `node ${helper} hook pre-bash`, timeout: 10 }] },
       },
     ]);
     hookCommand = settings.hooks.SessionStart[0].hooks[0].command;

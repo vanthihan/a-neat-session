@@ -87,7 +87,11 @@ test('npm exec --local installs into the project and uninstall restores it', () 
   assert.ok(fs.existsSync(path.join(proj, '.claude', 'commands', 'neat', 'do.md')));
   const rule = `Bash(node ${path.join(proj, '.claude', 'neat', 'bin', 'neat.cjs')} *)`;
   const local = JSON.parse(fs.readFileSync(path.join(proj, '.claude', 'settings.local.json'), 'utf8'));
-  assert.deepEqual(local.permissions.allow, [rule]);
+  assert.deepEqual(local.permissions.allow, [rule, 'Bash(set -o pipefail)']);
+  assert.deepEqual(local.hooks.PreToolUse, [{
+    matcher: 'Bash',
+    hooks: [{ type: 'command', command: `node ${path.join(proj, '.claude', 'neat', 'bin', 'neat.cjs')} hook pre-bash`, timeout: 10 }],
+  }]);
 
   execPackage(['--uninstall', '--local'], { cwd: proj });
   assert.deepEqual(snapshot(proj), pre);

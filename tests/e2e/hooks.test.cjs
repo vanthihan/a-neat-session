@@ -113,4 +113,71 @@ describe('hooks through a local install', () => {
       assert.deepEqual(state.reportGuard, { a1: 3 });
     });
   });
+
+  describe('PreToolUse', () => {
+    const preBash = (command, projectDir = proj) => runHookCommand(commandFor('PreToolUse'), {
+      projectDir,
+      input: JSON.stringify({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command, description: 'Run the tests' },
+      }),
+    });
+
+    test('the settings entry and the exact pipefail allow rule', () => {
+      assert.deepEqual(settings.hooks.PreToolUse, [{
+        matcher: 'Bash',
+        hooks: [{ type: 'command', command: `node ${helper} hook pre-bash`, timeout: 10 }],
+      }]);
+      assert.deepEqual(settings.permissions.allow, [`Bash(node ${helper} *)`, 'Bash(set -o pipefail)']);
+    });
+
+    test('a failing test command is rewritten; the pipeline keeps the failure and logs the output', () => {
+      fs.writeFileSync(path.join(proj, 'fail.test.cjs'), [
+        "const test = require('node:test');",
+        "const assert = require('node:assert');",
+        "test('adds two numbers', () => assert.equal(1 + 1, 3));",
+        '',
+      ].join('\n'));
+      const res = preBash('node --test fail.test.cjs');
+      assert.equal(res.status, 0, res.stderr);
+      assert.equal(res.stderr, '');
+      const { updatedInput } = JSON.parse(res.stdout).hookSpecificOutput;
+      assert.equal(updatedInput.description, 'Run the tests');
+      assert.ok(updatedInput.command.startsWith('set -o pipefail; node --test fail.test.cjs 2>&1 | node '), updatedInput.command);
+      const log = updatedInput.command.split(' ').pop();
+      assert.equal(path.dirname(log), path.join(proj, '.neat', 'runs', runId, 'logs'));
+
+      const original = spawnSync('bash', ['-c', 'node --test fail.test.cjs'], { cwd: proj, env: childEnv(), encoding: 'utf8' });
+      const run = spawnSync('bash', ['-c', updatedInput.command], { cwd: proj, env: childEnv(), encoding: 'utf8' });
+      assert.notEqual(original.status, 0);
+      assert.equal(run.status, original.status, run.stderr);
+      assert.ok(run.stdout.includes('adds two numbers'), run.stdout);
+      assert.ok(fs.statSync(log).size > 0);
+      assert.ok(fs.readFileSync(log, 'utf8').includes('adds two numbers'));
+    });
+
+    test('nothing is rewritten for ls, with the filter switched off, or without a run', () => {
+      for (const res of [preBash('ls')]) {
+        assert.equal(res.status, 0);
+        assert.equal(res.stdout, '');
+        assert.equal(res.stderr, '');
+      }
+      const cfg = path.join(proj, '.neat', 'config.json');
+      fs.writeFileSync(cfg, '{"filter":{"enabled":false}}');
+      try {
+        const off = preBash('npm test');
+        assert.equal(off.status, 0);
+        assert.equal(off.stdout, '');
+      } finally {
+        fs.rmSync(cfg);
+      }
+      const empty = path.join(tmp, 'empty');
+      fs.mkdirSync(empty, { recursive: true });
+      const none = preBash('npm test', empty);
+      assert.equal(none.status, 0);
+      assert.equal(none.stdout, '');
+      assert.equal(none.stderr, '');
+    });
+  });
 });

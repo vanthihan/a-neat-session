@@ -86,6 +86,11 @@ describe('installer settings integration', () => {
     matcher: 'compact|resume|clear',
     hooks: [{ type: 'command', command: `node ${path.join(target, 'neat', 'bin', 'neat.cjs')} hook session-start`, timeout: 10 }],
   });
+  const preToolUseFor = (target) => ({
+    matcher: 'Bash',
+    hooks: [{ type: 'command', command: `node ${path.join(target, 'neat', 'bin', 'neat.cjs')} hook pre-bash`, timeout: 10 }],
+  });
+  const PIPEFAIL = 'Bash(set -o pipefail)';
   const subagentStopFor = (target) => ({
     matcher: 'neat-explorer|neat-researcher|neat-implementer|neat-reviewer|neat-tester|neat-docs',
     hooks: [{ type: 'command', command: `node ${path.join(target, 'neat', 'bin', 'neat.cjs')} hook subagent-stop`, timeout: 30 }],
@@ -123,8 +128,9 @@ describe('installer settings integration', () => {
       Stop: USER_SETTINGS.hooks.Stop,
       SessionStart: [sessionStartFor(cfg)],
       SubagentStop: [subagentStopFor(cfg)],
+      PreToolUse: [preToolUseFor(cfg)],
     });
-    assert.deepEqual(merged.permissions.allow, ['Bash(ls *)', ruleFor(cfg)]);
+    assert.deepEqual(merged.permissions.allow, ['Bash(ls *)', ruleFor(cfg), PIPEFAIL]);
     assert.deepEqual(Object.keys(merged), Object.keys(USER_SETTINGS));
     assert.equal(fs.readFileSync(`${settings}.neat-bak`, 'utf8'), originalText);
 
@@ -151,8 +157,12 @@ describe('installer settings integration', () => {
     const res = runLocal([]);
     assert.equal(res.status, 0, res.stderr);
     assert.deepEqual(readJson(path.join(target, 'settings.local.json')), {
-      permissions: { allow: [ruleFor(target)] },
-      hooks: { SessionStart: [sessionStartFor(target)], SubagentStop: [subagentStopFor(target)] },
+      permissions: { allow: [ruleFor(target), PIPEFAIL] },
+      hooks: {
+        SessionStart: [sessionStartFor(target)],
+        SubagentStop: [subagentStopFor(target)],
+        PreToolUse: [preToolUseFor(target)],
+      },
     });
     assert.equal(fs.readFileSync(path.join(target, 'settings.json'), 'utf8'), '{"model":"x"}\n');
     assert.ok(!fs.existsSync(path.join(target, 'settings.local.json.neat-bak')), 'no backup when no file existed');
@@ -230,11 +240,14 @@ describe('installer settings integration', () => {
     assert.equal(m.settings.backup, null);
     assert.deepEqual(m.settings.added, [
       { path: ALLOW, value: ruleFor(cfg) },
+      { path: ALLOW, value: PIPEFAIL },
       { path: ['hooks', 'SessionStart'], value: sessionStartFor(cfg) },
       { path: ['hooks', 'SubagentStop'], value: subagentStopFor(cfg) },
+      { path: ['hooks', 'PreToolUse'], value: preToolUseFor(cfg) },
     ]);
     assert.deepEqual(m.settings.createdKeys, [
       ['permissions'], ['permissions', 'allow'], ['hooks'], ['hooks', 'SessionStart'], ['hooks', 'SubagentStop'],
+      ['hooks', 'PreToolUse'],
     ]);
   });
 
@@ -268,11 +281,13 @@ describe('installer settings integration', () => {
     const merged = readJson(settings);
     assert.deepEqual(merged.hooks.SessionStart, [...USER_SESSION_START, sessionStartFor(cfg)]);
     assert.deepEqual(merged.hooks.Stop, USER_SETTINGS.hooks.Stop);
-    assert.deepEqual(merged.permissions.allow, ['Bash(ls *)', ruleFor(cfg)]);
+    assert.deepEqual(merged.permissions.allow, ['Bash(ls *)', ruleFor(cfg), PIPEFAIL]);
     assert.deepEqual(sortedByJson(readJson(manifestPath).settings.added), sortedByJson([
       { path: ALLOW, value: ruleFor(cfg) },
+      { path: ALLOW, value: PIPEFAIL },
       { path: ['hooks', 'SessionStart'], value: sessionStartFor(cfg) },
       { path: ['hooks', 'SubagentStop'], value: subagentStopFor(cfg) },
+      { path: ['hooks', 'PreToolUse'], value: preToolUseFor(cfg) },
     ]));
 
     const afterReconcile = fs.readFileSync(settings, 'utf8');
@@ -295,7 +310,7 @@ describe('installer settings integration', () => {
     assert.deepEqual(readJson(settings).hooks.SessionStart, [...USER_SESSION_START, sessionStartFor(cfg)]);
     assert.deepEqual(
       sortedByJson(readJson(manifestPath).settings.added.map((a) => a.value)),
-      sortedByJson([ruleFor(cfg), sessionStartFor(cfg), subagentStopFor(cfg)]),
+      sortedByJson([ruleFor(cfg), PIPEFAIL, sessionStartFor(cfg), subagentStopFor(cfg), preToolUseFor(cfg)]),
     );
   });
 

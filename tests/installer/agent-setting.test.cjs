@@ -167,7 +167,7 @@ describe('installer --orchestrator-default', () => {
     const res = ok(runLocal(['--orchestrator-default']));
     const s = readJson(localSettings);
     assert.equal(s.agent, AGENT);
-    assert.ok(Array.isArray(s.permissions.allow) && s.permissions.allow.length === 1);
+    assert.ok(Array.isArray(s.permissions.allow) && s.permissions.allow.length === 2);
     assert.ok(Array.isArray(s.hooks.SessionStart));
     assert.ok(res.stdout.includes(`a-neat-session: session agent set to neat-orchestrator in ${localSettings}`), res.stdout);
     assert.ok(!res.stderr.includes('--global'), res.stderr);
