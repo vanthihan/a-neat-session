@@ -129,6 +129,21 @@ describe('readUsage', () => {
     assert.deepEqual(Object.keys(r).sort(), ['ctx', 'fiveHour', 'known', 'sevenDay', 'usage']);
   });
 
+  test('a FIFO or a directory at the capture path is unknown and does not block', { skip: process.platform === 'win32' }, () => {
+    const fifo = path.join(dir, 'capture-fifo.json');
+    const made = spawnSync('mkfifo', [fifo]);
+    assert.equal(made.status, 0, String(made.stderr));
+    const script = `const u = require(${JSON.stringify(path.join(REPO_ROOT, 'payload', 'neat', 'lib', 'usage.cjs'))});`
+      + `process.stdout.write(JSON.stringify(u.readUsage(process.argv[1])));`;
+    const res = spawnSync(process.execPath, ['-e', script, fifo], { encoding: 'utf8', timeout: 5000, env: childEnv() });
+    assert.equal(res.signal, null, 'readUsage blocked on a FIFO');
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(JSON.parse(res.stdout).known, false);
+    const sub = path.join(dir, 'capture-dir.json');
+    fs.mkdirSync(sub);
+    assert.equal(usage.readUsage(sub, NOW).known, false);
+  });
+
   test('an oversized file is unknown', () => {
     const big = JSON.stringify({ pad: 'x'.repeat(usage.MAX_CAPTURE_BYTES), ...statusline({ fiveHour: { used_percentage: 99, resets_at: NOW_SEC + 60 } }) });
     assert.equal(usage.readUsage(capture(big), NOW).known, false);

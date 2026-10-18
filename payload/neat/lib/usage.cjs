@@ -38,10 +38,15 @@ function windowPercent(win, nowSec, fresh) {
   return resets > nowSec ? pct : null;
 }
 
+// Checks the type before opening and opens without blocking, so a FIFO or
+// device at the capture path reads as unknown instead of hanging. The second
+// check on the open descriptor covers a swap between stat and open.
 function readCapture(file) {
   let fd;
   try {
-    fd = fs.openSync(file, 'r');
+    const pre = fs.statSync(file);
+    if (!pre.isFile() || pre.size > MAX_CAPTURE_BYTES) return null;
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK || 0));
     const st = fs.fstatSync(fd);
     if (!st.isFile() || st.size > MAX_CAPTURE_BYTES) return null;
     const data = JSON.parse(fs.readFileSync(fd, 'utf8'));
