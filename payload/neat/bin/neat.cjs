@@ -19,6 +19,7 @@ const usage = require(path.join(LIB, 'usage.cjs'));
 const stages = require(path.join(LIB, 'stages.cjs'));
 const codexCli = require(path.join(LIB, 'cli-codex.cjs'));
 const codex = require(path.join(LIB, 'codex.cjs'));
+const guide = require(path.join(LIB, 'guide.cjs'));
 
 const MAX_ERROR_LINES = 5;
 
@@ -41,6 +42,7 @@ const HELP = [
   'neat status [--json]',
   'neat usage-capture [--path <file>] [--quiet]',
   ...codexCli.HELP_LINES,
+  'neat guide <topic>',
   'neat help',
 ].join('\n');
 
@@ -180,6 +182,13 @@ function cmdStatus(args) {
   } catch (err) {
     out(`neat: status failed: ${err.message}`);
   }
+  return 0;
+}
+
+// Prints an orchestrator procedure with this helper's absolute path filled in.
+function cmdGuide(args) {
+  if (args.length !== 1) throw guide.topicError(guide.listTopics());
+  out(guide.guideText(args[0], __filename).trimEnd());
   return 0;
 }
 
@@ -348,6 +357,7 @@ function dispatch(argv) {
   if (cmd === 'status') return cmdStatus(argv.slice(1));
   if (cmd === 'write') return cmdWrite(argv.slice(1));
   if (cmd === 'report' && sub === 'check') return cmdReportCheck(rest);
+  if (cmd === 'guide') return cmdGuide(argv.slice(1));
   if (cmd === 'codex') return codexCli.dispatchCodex(argv.slice(1), { out, env: process.env, cwd: process.cwd(), readStdin });
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     out(HELP);
