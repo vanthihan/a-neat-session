@@ -225,4 +225,15 @@ describe('installer settings integration', () => {
     assert.equal(fs.readFileSync(path.join(cfg, 'settings.json'), 'utf8'), '{ broken');
     assert.ok(!fs.existsSync(path.join(cfg, 'commands', 'neat', 'do.md')));
   });
+
+  test('uninstall with a settings shape it cannot edit warns and still completes', () => {
+    assert.equal(runGlobal([]).status, 0);
+    fs.writeFileSync(path.join(cfg, 'settings.json'), '{ "permissions": null }\n');
+    const res = runGlobal(['--uninstall']);
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stderr, /warning: could not update .*settings\.json: permissions is not an object; remove the a-neat-session permission rule by hand/);
+    assert.ok(!fs.existsSync(path.join(cfg, 'neat', 'manifest.json')));
+    assert.ok(!fs.existsSync(path.join(cfg, 'commands', 'neat', 'do.md')));
+    assert.equal(fs.readFileSync(path.join(cfg, 'settings.json'), 'utf8'), '{ "permissions": null }\n');
+  });
 });
