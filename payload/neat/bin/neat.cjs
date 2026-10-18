@@ -7,9 +7,9 @@ const path = require('node:path');
 const LIB = path.join(__dirname, '..', 'lib');
 const runState = require(path.join(LIB, 'run-state.cjs'));
 const reportCheck = require(path.join(LIB, 'report-check.cjs'));
+const { parseTaskArgs, UsageError } = require(path.join(LIB, 'cli-args.cjs'));
 
 const MAX_ERROR_LINES = 5;
-const MODES = ['gate', 'auto', 'step'];
 
 const HELP = [
   'neat run new [--stdin] [--mode gate|auto|step] [task]',
@@ -17,13 +17,6 @@ const HELP = [
   'neat report check <file>',
   'neat help',
 ].join('\n');
-
-class UsageError extends Error {
-  constructor(message) {
-    super(message);
-    this.exitCode = 2;
-  }
-}
 
 function out(text) {
   process.stdout.write(`${text}\n`);
@@ -33,27 +26,12 @@ function readStdin() {
   return fs.readFileSync(0, 'utf8');
 }
 
-// Minimal leading/trailing --mode handling; replaced by cli-args parsing.
-function parseRunText(text) {
-  const tokens = text.trim().split(/\s+/).filter(Boolean);
-  let mode = null;
-  const take = (value) => {
-    if (!MODES.includes(value)) throw new UsageError(`invalid --mode '${value}' (use gate|auto|step)`);
-    mode = value;
-  };
-  if (tokens[0] === '--mode') take(tokens.splice(0, 2)[1]);
-  const n = tokens.length;
-  if (mode === null && tokens[n - 2] === '--mode') take(tokens.splice(n - 2, 2)[1]);
-  const task = tokens.join(' ');
-  if (!task) throw new UsageError('task is required');
-  return { task, mode: mode || 'gate' };
-}
-
 function cmdRunNew(args) {
-  const useStdin = args.includes('--stdin');
-  const rest = args.filter((a) => a !== '--stdin');
-  const text = useStdin ? readStdin() : rest.join(' ');
-  const { task, mode } = parseRunText(text);
+  const useStdin = args[0] === '--stdin';
+  const words = useStdin ? args.slice(1) : args;
+  if (useStdin && words.length > 0) throw new UsageError('run new --stdin takes no task words');
+  const text = useStdin ? readStdin() : words.join(' ');
+  const { task, mode } = parseTaskArgs(text);
   const root = runState.projectRoot(process.env, process.cwd());
   const state = runState.createRun(root, { task, mode }, runState.currentTime(process.env));
   out(`id=${state.id} mode=${state.mode} dir=${runState.runDir(root, state.id)}`);
@@ -79,7 +57,7 @@ function cmdWrite(args) {
   const file = runState.writeRunFile(root, id, name, content);
   out(file);
   if (!name.startsWith('report-')) return 0;
-  return printCheck(reportCheck.checkReport(content));
+  return printCheck(reportCheck.checkReportFile(file));
 }
 
 function cmdReportCheck(args) {

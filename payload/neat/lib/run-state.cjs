@@ -3,20 +3,13 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { UsageError } = require('./cli-args.cjs');
 
 const PIPELINE = ['explore', 'plan', 'implement', 'review', 'test', 'docs'];
 const RUN_ID = /^\d{8}-\d{6}-[a-z0-9-]{1,48}$/;
 const RUN_FILE_NAME = /^[a-z][A-Za-z0-9-]*\.(md|txt|patch|json)$/;
 const MAX_FILE_NAME = 80;
 const MAX_SLUG = 40;
-
-class RunUsageError extends Error {
-  constructor(message) {
-    super(message);
-    this.name = 'UsageError';
-    this.exitCode = 2;
-  }
-}
 
 function projectRoot(env = process.env, cwd = process.cwd()) {
   if (env.NEAT_PROJECT_DIR) return path.resolve(env.NEAT_PROJECT_DIR);
@@ -45,7 +38,7 @@ function runDir(root, id) {
 function currentTime(env = process.env) {
   if (!env.NEAT_NOW) return new Date();
   const d = new Date(env.NEAT_NOW);
-  if (Number.isNaN(d.getTime())) throw new RunUsageError(`invalid NEAT_NOW: ${env.NEAT_NOW}`);
+  if (Number.isNaN(d.getTime())) throw new UsageError(`invalid NEAT_NOW: ${env.NEAT_NOW}`);
   return d;
 }
 
@@ -83,7 +76,7 @@ function isValidRunId(id) {
 }
 
 function assertRunId(id) {
-  if (!isValidRunId(id)) throw new RunUsageError(`invalid run id: ${id}`);
+  if (!isValidRunId(id)) throw new UsageError(`invalid run id: ${id}`);
 }
 
 function atomicWrite(file, content) {
@@ -127,7 +120,7 @@ function createRun(root, { task, mode }, now = currentTime()) {
 function loadRun(root, id) {
   assertRunId(id);
   const file = path.join(runDir(root, id), 'state.json');
-  if (!fs.existsSync(file)) throw new RunUsageError(`run not found: ${id}`);
+  if (!fs.existsSync(file)) throw new UsageError(`run not found: ${id}`);
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
@@ -141,14 +134,14 @@ function saveRun(root, state, now = currentTime()) {
 function assertRunFileName(name) {
   const ok = typeof name === 'string' && name.length <= MAX_FILE_NAME
     && name !== 'state.json' && RUN_FILE_NAME.test(name);
-  if (!ok) throw new RunUsageError(`invalid run file name: ${name}`);
+  if (!ok) throw new UsageError(`invalid run file name: ${name}`);
 }
 
 function writeRunFile(root, id, name, content) {
   assertRunId(id);
   assertRunFileName(name);
   const dir = runDir(root, id);
-  if (!fs.existsSync(path.join(dir, 'state.json'))) throw new RunUsageError(`run not found: ${id}`);
+  if (!fs.existsSync(path.join(dir, 'state.json'))) throw new UsageError(`run not found: ${id}`);
   const file = path.join(dir, name);
   atomicWrite(file, content);
   return file;
@@ -156,7 +149,6 @@ function writeRunFile(root, id, name, content) {
 
 module.exports = {
   PIPELINE,
-  RunUsageError,
   projectRoot,
   runsDir,
   runDir,

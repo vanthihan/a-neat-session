@@ -88,13 +88,35 @@ function failure(message) {
   return { ok: false, errors: [message], words: 0 };
 }
 
+// Each `- ` item under ## Artifacts is a path (first token, backticks removed)
+// or `none`. Relative paths resolve against the report's directory.
+function artifactPaths(text, reportDir) {
+  const lines = String(text).split(/\r?\n/);
+  const body = sectionLines(lines, headingLines(lines), '## Artifacts') || [];
+  return body
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('- '))
+    .map((l) => l.slice(2).trim().replace(/`/g, '').split(/\s+/)[0])
+    .filter((item) => item && !/^none\.?$/i.test(item))
+    .map((item) => path.resolve(reportDir, item));
+}
+
+function artifactErrors(text, reportDir) {
+  return artifactPaths(text, reportDir)
+    .filter((p) => !fs.existsSync(p))
+    .map((p) => `artifact not found: ${p}`);
+}
+
 function checkReportFile(file) {
   const resolved = path.resolve(file);
   if (!isInsideRunDir(resolved)) return failure(`path outside .neat/runs: ${resolved}`);
   if (!fs.existsSync(resolved)) return failure(`report not found: ${resolved}`);
   const real = fs.realpathSync(resolved);
   if (!isInsideRunDir(real)) return failure(`path outside .neat/runs: ${real}`);
-  return checkReport(fs.readFileSync(real, 'utf8'));
+  const text = fs.readFileSync(real, 'utf8');
+  const base = checkReport(text);
+  const errors = [...base.errors, ...artifactErrors(text, path.dirname(resolved))];
+  return { ok: errors.length === 0, errors, words: base.words };
 }
 
 module.exports = {

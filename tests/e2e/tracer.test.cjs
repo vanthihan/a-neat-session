@@ -76,6 +76,12 @@ test('(e) write stores a brief and prints its absolute path', () => {
 });
 
 test('(f) a valid report passes write and report check', () => {
+  const map = runNode([helper, 'write', runId, 'explore-map.md', '--stdin'], {
+    cwd: proj,
+    env,
+    input: 'src/app.js:12 - request parsing\n',
+  });
+  assert.equal(map.status, 0, map.stderr);
   const res = runNode([helper, 'write', runId, 'report-explorer.md', '--stdin'], {
     cwd: proj,
     env,
