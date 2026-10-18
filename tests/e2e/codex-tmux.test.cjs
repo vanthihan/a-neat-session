@@ -52,9 +52,10 @@ function alive(pid) {
   }
 }
 
-// A project, a fake codex and a private tmux server holding one session `keep`.
-function setup(extra = {}) {
-  const proj = makeTempDir('neat-tmx-');
+// A project (`opts.proj`, else a new temp dir), a fake codex and a private
+// tmux server holding one session `keep`.
+function setup(extra = {}, opts = {}) {
+  const proj = opts.proj || makeTempDir('neat-tmx-');
   const binDir = makeTempDir('neat-tmx-bin-');
   const tmuxDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ntx-'));
   const shim = installFakeCodex(binDir);
@@ -75,8 +76,8 @@ function teardown(ctx) {
   removeDir(ctx.tmuxDir);
 }
 
-function withTmux(extra, fn) {
-  const ctx = setup(extra);
+function withTmux(extra, fn, opts = {}) {
+  const ctx = setup(extra, opts);
   try {
     fn(ctx);
   } finally {
@@ -240,6 +241,28 @@ test('cancel of a tmux job ends its process group and removes the window', OPTS,
     assert.ok(until(() => !alive(run.pid) && !alive(call.pid), 5000), 'wrapper and codex must stop');
     assert.ok(until(() => !windows(ctx).some((w) => w.name === `neat-${run.job}`), 3000), 'window must be gone');
   });
+});
+
+test('a project path holding tmux format syntax runs no command and the job still uses it', OPTS, () => {
+  const outer = makeTempDir('neat-tmx-fmt-');
+  const mark = path.join(outer, 'PWNED');
+  const proj = path.join(outer, 'p#(touch $NTX_MARK)');
+  fs.mkdirSync(proj);
+  try {
+    withTmux({ NTX_MARK: mark }, (ctx) => {
+      const { id } = newRun(ctx, 'odd project path');
+      brief(ctx, id, 'reviewer');
+      const run = codexRun(ctx, [id, 'reviewer', '--tmux']);
+      const waited = neat(ctx, ['codex', 'wait', run.job]);
+      assert.equal(waited.stdout, `job ${run.job} status=done exit=0 worker=reviewer\n`);
+      const exec = calls(ctx).find((c) => c.argv[0] === 'exec');
+      assert.equal(exec.argv[exec.argv.indexOf('-C') + 1], proj);
+      sleepMs(300);
+      assert.equal(fs.existsSync(mark), false, 'tmux must not run #(...) from the project path');
+    }, { proj });
+  } finally {
+    removeDir(outer);
+  }
 });
 
 test('without tmux on PATH the job runs in the background with a note', OPTS, () => {

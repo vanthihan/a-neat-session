@@ -109,12 +109,15 @@ function tmuxAvailable(env) {
 // Opens the job's tmux window running the wrapper with `--tee`. Inside tmux
 // (env.TMUX) the window opens in the current session; outside, in the
 // detached session neat-<runId>, created on first use. Session and window
-// names come only from validated run and job ids. Returns { pid, target, attach }.
+// names come only from validated run and job ids. There is no `-c` start
+// directory: tmux expands formats in it, and `#(...)` in a project path would
+// run a shell command. The wrapper gets the root from NEAT_PROJECT_DIR (`-e`
+// values and the command argv are passed verbatim). Returns { pid, target, attach }.
 function startTmux(root, runId, jobId, env) {
   const session = `neat-${runId}`;
   const window = ['-n', `neat-${jobId}`];
   const tail = [
-    '-c', root, '-e', `NEAT_PROJECT_DIR=${root}`, '-P', '-F', TMUX_FORMAT,
+    '-e', `NEAT_PROJECT_DIR=${root}`, '-P', '-F', TMUX_FORMAT,
     '--', process.execPath, helperPath(), 'codex', '_exec', runId, jobId, '--tee',
   ];
   const inside = Boolean(env.TMUX);
