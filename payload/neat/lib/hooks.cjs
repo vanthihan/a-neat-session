@@ -20,6 +20,7 @@ const HELPER = path.resolve(__dirname, '..', 'bin', 'neat.cjs');
 const HANDLERS = Object.freeze({
   'session-start': ['hook-session-start.cjs', 'sessionStart'],
   'subagent-stop': ['hook-subagent-stop.cjs', 'subagentStop'],
+  'pre-bash': ['hook-pre-bash.cjs', 'preBash'],
 });
 
 function handlerFor(name) {

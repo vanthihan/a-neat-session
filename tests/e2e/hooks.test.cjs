@@ -148,8 +148,10 @@ describe('hooks through a local install', () => {
       const log = updatedInput.command.split(' ').pop();
       assert.equal(path.dirname(log), path.join(proj, '.neat', 'runs', runId, 'logs'));
 
-      const original = spawnSync('bash', ['-c', 'node --test fail.test.cjs'], { cwd: proj, env: childEnv(), encoding: 'utf8' });
-      const run = spawnSync('bash', ['-c', updatedInput.command], { cwd: proj, env: childEnv(), encoding: 'utf8' });
+      // Without NODE_TEST_CONTEXT the inner `node --test` reports and exits on its own.
+      const shellEnv = childEnv({ NODE_TEST_CONTEXT: undefined });
+      const original = spawnSync('bash', ['-c', 'node --test fail.test.cjs'], { cwd: proj, env: shellEnv, encoding: 'utf8' });
+      const run = spawnSync('bash', ['-c', updatedInput.command], { cwd: proj, env: shellEnv, encoding: 'utf8' });
       assert.notEqual(original.status, 0);
       assert.equal(run.status, original.status, run.stderr);
       assert.ok(run.stdout.includes('adds two numbers'), run.stdout);

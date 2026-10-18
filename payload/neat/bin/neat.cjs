@@ -19,6 +19,18 @@ if (process.argv[2] === 'hook') {
   return;
 }
 
+// The output filter sits at the end of a pipe: it must read all of its input
+// and exit 0 whatever happens, so it also runs before the other modules load.
+if (process.argv[2] === 'filter') {
+  try {
+    require(path.join(LIB, 'output-filter.cjs')).main(process.argv.slice(3));
+  } catch {
+    // no stderr: the command's own exit code is what counts
+  }
+  process.exitCode = 0;
+  return;
+}
+
 const runState = require(path.join(LIB, 'run-state.cjs'));
 const reportCheck = require(path.join(LIB, 'report-check.cjs'));
 const { parseTaskArgs, UsageError, MODES } = require(path.join(LIB, 'cli-args.cjs'));
@@ -65,6 +77,7 @@ const HELP = [
   ...codexCli.HELP_LINES,
   'neat guide <topic>',
   'neat procedure',
+  'neat filter <run-id> <test|build|install> <log>',
   'neat hook <name>',
   'neat help',
 ].join('\n');
