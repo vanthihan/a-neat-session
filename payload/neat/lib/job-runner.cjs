@@ -190,11 +190,11 @@ function startJob(root, {
   const id = jobs.makeJobId(root, runId, worker);
   const base = {
     id, runId, worker, mode: launch.mode, sandbox: plan.sandbox, effort: plan.effort, model: plan.model,
-    codexPath: plan.codexPath, tmuxTarget: null, root, ...jobs.jobPaths(root, runId, id, worker),
+    codexPath: plan.codexPath, tmuxTarget: null, root, ...jobs.jobPaths(root, runId, id),
   };
   execArgs(plan, root, base.outputPath); // invalid sandbox/effort/model: stop before any write
   const execValue = execEnvValue(plan);
-  fs.rmSync(base.outputPath, { force: true });
+  fs.rmSync(jobs.workerOutputPath(root, runId, worker), { force: true });
   writePrompt(base.promptPath, plan.briefPath, plan.role);
   const started = launch.mode === 'tmux'
     ? startTmux(root, runId, id, env, execValue)
@@ -217,6 +217,18 @@ async function ownRecord(root, runId, jobId) {
     if (record && record.pid === process.pid) return record.status === 'running' ? record : null;
     if (Date.now() > deadline) return null;
     await sleep(OWN_RECORD_POLL_MS);
+  }
+}
+
+// Copies the job's own output to codex-<worker>.md (temp file, then rename).
+function publishOutput(root, record) {
+  const target = jobs.workerOutputPath(root, record.runId, record.worker);
+  const tmp = `${target}.tmp-${process.pid}`;
+  try {
+    fs.copyFileSync(record.outputPath, tmp);
+    fs.renameSync(tmp, target);
+  } catch {
+    fs.rmSync(tmp, { force: true });
   }
 }
 
@@ -275,7 +287,8 @@ async function runWrapper(root, runId, jobId, { tee = false, env = process.env }
     fs.closeSync(logFd);
   }
   const ok = code === 0 && hasOutput(record.outputPath);
-  jobs.finishJob(root, record, { status: ok ? 'done' : 'failed', exitCode: code, endedAt: nowIso() });
+  const ended = jobs.finishJob(root, record, { status: ok ? 'done' : 'failed', exitCode: code, endedAt: nowIso() });
+  if (ok && ended.status === 'done') publishOutput(root, record);
   return 0;
 }
 

@@ -48,13 +48,23 @@ function jobFile(root, runId, jobId, suffix = '.json') {
   return path.join(jobsDir(root, runId), `${jobId}${suffix}`);
 }
 
-// The files of job `jobId` of `worker`: codex output, job log and prompt.
-function jobPaths(root, runId, jobId, worker) {
+// The files of job `jobId`: its own codex output, job log and prompt. Each
+// job has its own output, so a retry never touches an earlier job's result.
+function jobPaths(root, runId, jobId) {
   return {
-    outputPath: path.join(runState.runDir(root, runId), `codex-${worker}.md`),
+    outputPath: jobFile(root, runId, jobId, '.out.md'),
     logPath: jobFile(root, runId, jobId, '.log'),
     promptPath: jobFile(root, runId, jobId, '.prompt.md'),
   };
+}
+
+// codex-<worker>.md: a copy of the output of the worker's latest job that
+// finished done (the wrapper writes it; startJob removes it on a new launch).
+function workerOutputPath(root, runId, worker) {
+  if (typeof worker !== 'string' || !runState.WORKER_NAME.test(worker)) {
+    throw new UsageError(`invalid worker name '${worker}'`);
+  }
+  return path.join(runState.runDir(root, runId), `codex-${worker}.md`);
 }
 
 function randomSuffix() {
@@ -115,7 +125,7 @@ function readJob(root, runId, jobId) {
     return null;
   }
   if (!fitsFile(rec, runId, jobId)) return null;
-  return { ...rec, root: path.resolve(root), ...jobPaths(root, runId, jobId, rec.worker) };
+  return { ...rec, root: path.resolve(root), ...jobPaths(root, runId, jobId) };
 }
 
 function runIdsNewestFirst(root) {
@@ -266,6 +276,7 @@ module.exports = {
   jobsDir,
   jobFile,
   jobPaths,
+  workerOutputPath,
   makeJobId,
   writeJob,
   readJob,

@@ -33,7 +33,7 @@ function record(runId, id, extra = {}) {
   const jobsDir = path.join(root, '.neat', 'runs', runId, 'jobs');
   return {
     id, runId, worker: 'reviewer', mode: 'bg', sandbox: 'read-only', pid: null, pgid: null, status: 'running', exitCode: null,
-    outputPath: path.join(root, '.neat', 'runs', runId, 'codex-reviewer.md'),
+    outputPath: path.join(jobsDir, `${id}.out.md`),
     logPath: path.join(jobsDir, `${id}.log`),
     promptPath: path.join(jobsDir, `${id}.prompt.md`),
     ...extra,
@@ -142,7 +142,7 @@ describe('records are untrusted input', () => {
     const rec = jobs.readJob(root, RUN_A, 'reviewer-5ec7');
     const runDir = path.join(root, '.neat', 'runs', RUN_A);
     assert.equal(rec.root, path.resolve(root));
-    assert.equal(rec.outputPath, path.join(runDir, 'codex-reviewer.md'));
+    assert.equal(rec.outputPath, path.join(runDir, 'jobs', 'reviewer-5ec7.out.md'));
     assert.equal(rec.logPath, path.join(runDir, 'jobs', 'reviewer-5ec7.log'));
     assert.equal(rec.promptPath, path.join(runDir, 'jobs', 'reviewer-5ec7.prompt.md'));
     const built = codexResult.buildResult({ ...rec, status: 'failed', exitCode: 1 }, {

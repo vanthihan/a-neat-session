@@ -238,7 +238,7 @@ test('cancel of a tmux job ends its process group and removes the window', OPTS,
     const { id, dir } = newRun(ctx, 'cancel in tmux');
     brief(ctx, id, 'reviewer');
     const run = codexRun(ctx, [id, 'reviewer', '--tmux']);
-    const out = path.join(dir, 'codex-reviewer.md');
+    const out = path.join(dir, 'jobs', `${run.job}.out.md`);
     const call = until(() => calls(ctx).find((c) => c.argv[0] === 'exec' && c.argv.includes(out)), 5000);
     assert.ok(call, 'fake codex must have started');
     const res = neat(ctx, ['codex', 'cancel', run.job]);
@@ -279,7 +279,7 @@ test('cancel after a window renumber closes the job window, never the window now
     const { id, dir } = newRun(ctx, 'renumbered windows');
     brief(ctx, id, 'reviewer');
     const run = codexRun(ctx, [id, 'reviewer', '--tmux'], insideKeep(ctx));
-    const out = path.join(dir, 'codex-reviewer.md');
+    const out = path.join(dir, 'jobs', `${run.job}.out.md`);
     const call = until(() => calls(ctx).find((c) => c.argv[0] === 'exec' && c.argv.includes(out)), 5000);
     assert.ok(call, 'fake codex must have started');
     const jobIndex = windows(ctx).find((w) => w.name === `neat-${run.job}`).index;

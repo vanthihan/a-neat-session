@@ -147,12 +147,12 @@ test('tracer: codex run returns at once, wait blocks until done, result passes r
   assert.equal(rec.pid, pid);
   assert.equal(rec.pgid, pid);
   assert.equal(rec.codexPath, shim);
-  assert.equal(rec.outputPath, path.join(dir, 'codex-reviewer.md'));
+  assert.equal(rec.outputPath, path.join(dir, 'jobs', `${job}.out.md`));
 
   const execs = calls().filter((c) => c.argv[0] === 'exec');
   assert.equal(execs.length, 1);
   assert.deepEqual(execs[0].argv, ['exec', '-s', 'read-only', '-C', proj, '--skip-git-repo-check',
-    '-c', 'model_reasoning_effort=medium', '-o', path.join(dir, 'codex-reviewer.md'), '-']);
+    '-c', 'model_reasoning_effort=medium', '-o', path.join(dir, 'jobs', `${job}.out.md`), '-']);
   assert.ok(execs[0].stdin.startsWith('# Brief: reviewer\n'), execs[0].stdin.slice(0, 80));
   assert.ok(execs[0].stdin.includes('\n## Codex rules\n'));
   assert.ok(execs[0].stdin.includes('final message'));
@@ -171,6 +171,24 @@ test('tracer: codex run returns at once, wait blocks until done, result passes r
   const check = neat(['report', 'check', reportFile]);
   assert.equal(check.status, 0, check.stdout);
   assert.match(check.stdout, /^report ok/);
+});
+
+test('a retry of the same worker never destroys the earlier job\'s result', () => {
+  const first = startReviewer('retry keeps results', { FAKE_CODEX_OUTPUT: 'FIRST JOB OUTPUT\n' });
+  assert.match(waitJob(first.job).line, /status=done exit=0/);
+  const shared = path.join(first.dir, 'codex-reviewer.md');
+  assert.equal(fs.readFileSync(shared, 'utf8'), 'FIRST JOB OUTPUT\n', 'a done job publishes codex-<worker>.md');
+
+  const retry = neat(['codex', 'run', first.id, 'reviewer'], { FAKE_CODEX_EXIT: '1' });
+  assert.equal(retry.status, 0, retry.stderr);
+  const second = retry.stdout.trim().match(JOB_LINE)[1];
+  assert.match(waitJob(second).line, /status=failed exit=1/);
+  assert.equal(fs.existsSync(shared), false, 'a failed job leaves no codex-<worker>.md behind');
+
+  const res = neat(['codex', 'result', first.job]);
+  assert.equal(res.status, 0, res.stderr);
+  assert.ok(res.stdout.includes('FIRST JOB OUTPUT'), res.stdout);
+  assert.ok(!res.stdout.includes('no output file'), res.stdout);
 });
 
 test('prompt text with shell syntax reaches codex stdin byte-exact and runs nothing', () => {
@@ -203,7 +221,7 @@ test('non-conforming output is wrapped: Status partial, first 250 words under Fi
   assert.ok(findings.includes('w248'));
   assert.ok(!findings.includes('w249'), 'only the first 250 words');
   assert.ok(!/^#/m.test(findings), 'no heading survives inside Findings');
-  assert.ok(report.includes(`## Artifacts\n- ${path.join(dir, 'codex-reviewer.md')}`));
+  assert.ok(report.includes(`## Artifacts\n- ${path.join(dir, 'jobs', `${job}.out.md`)}`));
   assert.ok(words(report) <= 300);
   const check = neat(['report', 'check', path.join(dir, 'report-reviewer.md')]);
   assert.equal(check.status, 0, check.stdout);
@@ -266,9 +284,9 @@ function until(fn, ms) {
   return v;
 }
 
-// pid of the fake codex started for the reviewer of run dir `dir`.
-function codexPidFor(dir) {
-  const out = path.join(dir, 'codex-reviewer.md');
+// pid of the fake codex started for job `job` of run dir `dir`.
+function codexPidFor(dir, job) {
+  const out = path.join(dir, 'jobs', `${job}.out.md`);
   const call = until(() => calls().find((c) => c.argv[0] === 'exec' && c.argv.includes(out)), 3000);
   return call && call.pid;
 }
@@ -317,7 +335,7 @@ test('timeout, result while running, then cancel stops the whole group', () => {
   assert.equal(twice.status, 2);
   assert.match(twice.stderr, new RegExp(`job ${job} of reviewer is still running`));
 
-  const codexPid = codexPidFor(dir);
+  const codexPid = codexPidFor(dir, job);
   assert.ok(codexPid, 'fake codex must have started');
   const res = neat(['codex', 'cancel', job]);
   assert.equal(res.status, 0, res.stderr);
@@ -341,7 +359,7 @@ test('cancel kills a codex that ignores SIGTERM once the wrapper is gone', () =>
   fs.rmSync(log, { force: true });
   const extra = { FAKE_CODEX_DELAY_MS: '30000', FAKE_CODEX_IGNORE_TERM: '1' };
   const { dir, job, pid } = startReviewer('stubborn codex', extra);
-  const codexPid = codexPidFor(dir);
+  const codexPid = codexPidFor(dir, job);
   assert.ok(codexPid, 'fake codex must have started');
   try {
     const res = neat(['codex', 'cancel', job]);
@@ -387,7 +405,7 @@ test('the wrapper runs the codex its launcher named, never codexPath, root or pa
   const call = calls().find((c) => c.argv[0] === 'exec');
   assert.ok(call, 'the launcher-named codex must run');
   assert.equal(call.argv[call.argv.indexOf('-C') + 1], proj);
-  assert.equal(call.argv[call.argv.indexOf('-o') + 1], path.join(dir, 'codex-reviewer.md'));
+  assert.equal(call.argv[call.argv.indexOf('-o') + 1], path.join(jobsDir, `${job}.out.md`));
   assert.equal(call.stdin.split('\n')[0], '# Brief: reviewer');
   assert.equal(fs.existsSync(elsewhere), false);
   assert.equal(readJson(path.join(jobsDir, `${job}.json`)).status, 'done');
@@ -485,7 +503,7 @@ test('reviewer-2: codex below hard, skipped at hard; its job runs read-only into
   const exec = calls().find((c) => c.argv[0] === 'exec');
   const out = path.join(dir, 'codex-reviewer-2.md');
   assert.deepEqual(exec.argv.slice(0, 3), ['exec', '-s', 'read-only']);
-  assert.equal(exec.argv[exec.argv.indexOf('-o') + 1], out);
+  assert.equal(exec.argv[exec.argv.indexOf('-o') + 1], path.join(dir, 'jobs', `${m[1]}.out.md`));
   assert.ok(exec.stdin.startsWith('# Brief: reviewer-2\n'));
   assert.ok(exec.stdin.includes(`Review file: ${path.join(dir, 'review-2.md')}`));
   assert.ok(exec.stdin.includes('`path:line - high|medium|low - issue`'));
