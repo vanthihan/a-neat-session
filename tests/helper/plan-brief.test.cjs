@@ -547,3 +547,96 @@ test('run worker and brief accept reviewer-2; invalid names list it', () => {
     assert.match(bad.stderr, /\|reviewer\|reviewer-2\|/);
   }
 });
+
+// ---------- brief --fix ----------
+
+function fixRun(taskText, review) {
+  const run = newRun(taskText);
+  fs.writeFileSync(path.join(run.dir, 'plan.md'), VALID_PLAN);
+  assert.equal(neat(['plan', 'check', run.id]).status, 0);
+  if (review !== undefined) {
+    fs.writeFileSync(path.join(run.dir, 'review.md'), review);
+    const merged = neat(['review', 'merge', run.id]);
+    assert.equal(merged.status, 0, merged.stderr);
+  }
+  return run;
+}
+
+const FIX_REVIEW = [
+  'a.js:3 - high - unchecked input reaches the query',
+  'b.js:5 - medium - error from the parser is swallowed',
+  'c.js:1 - low - naming only',
+  'z.js:1 - high - file nobody owns',
+  'a.js:40 - low - style nit',
+].join('\n');
+
+test('help lists brief --fix', () => {
+  assert.match(neat(['help']).stdout, /^neat brief <run-id> <worker> \[--stdin\] \[--fix\]$/m);
+});
+
+test('brief --fix appends only the task\'s merged critical and warning lines as data', () => {
+  const { id, dir } = fixRun('fix round', `${FIX_REVIEW}\n`);
+  const res = neat(['brief', id, 'implementer-T1', '--fix']);
+  assert.equal(res.status, 0, res.stderr);
+  const lines = res.stdout.split('\n');
+  assert.equal(lines[0], path.join(dir, 'brief-implementer-T1.md'));
+  assert.ok(lines[1].startsWith('route worker=implementer-T1 '), lines[1]);
+  const text = fs.readFileSync(lines[0], 'utf8');
+  const section = text.slice(text.indexOf('## Review findings to fix'));
+  const body = section.trimEnd().split('\n');
+  assert.equal(body[0], '## Review findings to fix');
+  assert.match(body[1], /reviewer data/i);
+  assert.match(body[1], /check/i);
+  assert.deepEqual(body.slice(2), [
+    'a.js:3 critical [claude] unchecked input reaches the query',
+    'b.js:5 warning [claude] error from the parser is swallowed',
+  ]);
+  assert.ok(text.indexOf('## Rules') < text.indexOf('## Review findings to fix'));
+  assert.equal(readState(dir).workers.find((x) => x.name === 'implementer-T1').status, 'running');
+  const t3 = neat(['brief', id, 'implementer-T3', '--fix']);
+  assert.equal(t3.status, 0, t3.stderr);
+  const t3text = fs.readFileSync(t3.stdout.split('\n')[0], 'utf8');
+  assert.match(t3text, /## Review findings to fix\n.*\nb\.js:5 warning \[claude\] error from the parser is swallowed\n$/);
+});
+
+test('brief --fix combines with --stdin in either order, findings after the notes', () => {
+  const { id } = fixRun('fix with notes', `${FIX_REVIEW}\n`);
+  for (const args of [['--fix', '--stdin'], ['--stdin', '--fix']]) {
+    const res = neat(['brief', id, 'implementer-T1', ...args], 'focus on the query\n');
+    assert.equal(res.status, 0, res.stderr);
+    const text = fs.readFileSync(res.stdout.split('\n')[0], 'utf8');
+    assert.match(text, /## Orchestrator notes\nfocus on the query\n\n## Review findings to fix\n/);
+  }
+  for (const args of [['--fix', '--fix'], ['--stdin', '--stdin'], ['--fixx'], ['--fix', 'x']]) {
+    assert.equal(neat(['brief', id, 'implementer-T1', ...args], 'n\n').status, 2, args.join(' '));
+  }
+});
+
+test('brief --fix refuses tasks without findings, non-plan workers and runs without a merge', () => {
+  const { id, dir } = fixRun('fix refusals', `${FIX_REVIEW}\n`);
+  const before = fs.readFileSync(path.join(dir, 'state.json'), 'utf8');
+  const t2 = neat(['brief', id, 'implementer-T2', '--fix']);
+  assert.equal(t2.status, 2);
+  assert.equal(t2.stderr, 'neat: no review findings for T2\n');
+  const rev = neat(['brief', id, 'reviewer', '--fix']);
+  assert.equal(rev.status, 2);
+  assert.match(rev.stderr, /--fix/);
+  assert.ok(!fs.existsSync(path.join(dir, 'brief-implementer-T2.md')));
+  assert.ok(!fs.existsSync(path.join(dir, 'brief-reviewer.md')));
+  assert.equal(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'), before);
+  const fresh = fixRun('fix before merge');
+  const early = neat(['brief', fresh.id, 'implementer-T1', '--fix']);
+  assert.equal(early.status, 2);
+  assert.equal(early.stderr, 'neat: run review merge first\n');
+});
+
+test('brief --fix keeps at most 30 lines of at most 300 characters', () => {
+  const many = Array.from({ length: 40 }, (_, i) => `a.js:${i * 10 + 1} - medium - ${'w'.repeat(290)} ${i}`);
+  const { id } = fixRun('fix many', `${many.join('\n')}\n`);
+  const res = neat(['brief', id, 'implementer-T1', '--fix']);
+  assert.equal(res.status, 0, res.stderr);
+  const text = fs.readFileSync(res.stdout.split('\n')[0], 'utf8');
+  const body = text.slice(text.indexOf('## Review findings to fix')).trimEnd().split('\n').slice(2);
+  assert.equal(body.length, 30);
+  assert.ok(body.every((l) => l.length <= 300 && l.startsWith('a.js:')), body.map((l) => l.length).join(','));
+});

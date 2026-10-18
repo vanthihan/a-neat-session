@@ -89,8 +89,10 @@ describe('effectiveConfig layering', () => {
       'codex.enabled': 'default',
       'codex.model': 'default',
       'codex.sandboxDefault': 'default',
+      'review.maxRounds': 'default',
     });
     assert.deepEqual(cfg.codex, { enabled: 'auto', model: null, sandboxDefault: 'workspace-write' });
+    assert.deepEqual(cfg.review, { maxRounds: 2 });
     assert.deepEqual(cfg.files, {
       global: { path: l.globalFile, exists: false },
       project: { path: l.projectFile, exists: false },
@@ -247,6 +249,40 @@ describe('codex settings', () => {
   });
 });
 
+describe('review settings', () => {
+  test('review.maxRounds defaults to 2 and takes integers 0-5 in the global and the project file', () => {
+    const l = layout();
+    assert.equal(l.effective().review.maxRounds, 2);
+    for (const n of [0, 1, 5]) {
+      writeJson(l.globalFile, { review: { maxRounds: n } });
+      const cfg = l.effective();
+      assert.equal(cfg.review.maxRounds, n);
+      assert.equal(cfg.sources['review.maxRounds'], 'global');
+      assert.equal(config.configValue(cfg, 'review.maxRounds'), String(n));
+    }
+    writeJson(l.projectFile, { review: { maxRounds: 4 } });
+    const cfg = l.effective();
+    assert.equal(cfg.review.maxRounds, 4);
+    assert.equal(cfg.sources['review.maxRounds'], 'project');
+  });
+
+  test('review.maxRounds must be an integer from 0 to 5; unknown review keys are rejected', () => {
+    const l = layout();
+    for (const scope of ['global', 'project']) {
+      const file = scope === 'global' ? l.globalFile : l.projectFile;
+      for (const bad of [2.5, -1, 6, '2', null]) {
+        writeJson(file, { review: { maxRounds: bad } });
+        configError(() => l.effective(), `invalid config ${file}: review.maxRounds must be an integer from 0 to 5`);
+      }
+      writeJson(file, { review: { rounds: 2 } });
+      configError(() => l.effective(), `invalid config ${file}: unknown key 'review.rounds'`);
+      writeJson(file, { review: 2 });
+      configError(() => l.effective(), `invalid config ${file}: review must be a JSON object`);
+      fs.rmSync(file);
+    }
+  });
+});
+
 describe('configLines and configValue', () => {
   test('show lines carry value and source plus both file paths', () => {
     const l = layout();
@@ -260,6 +296,7 @@ describe('configLines and configValue', () => {
       'codex.enabled=auto (default)',
       'codex.model=(unset) (default)',
       'codex.sandboxDefault=workspace-write (default)',
+      'review.maxRounds=2 (default)',
       `global=${l.globalFile} (found)`,
       `project=${l.projectFile} (missing)`,
     ]);
@@ -273,7 +310,7 @@ describe('configLines and configValue', () => {
     assert.ok(path.isAbsolute(config.configValue(cfg, 'usage.capturePath')));
     configError(
       () => config.configValue(cfg, 'nope'),
-      "unknown config key 'nope' (use profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault)",
+      "unknown config key 'nope' (use profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault|review.maxRounds)",
     );
   });
 });
@@ -310,6 +347,7 @@ describe('CLI', () => {
       'codex.enabled=auto (default)',
       'codex.model=(unset) (default)',
       'codex.sandboxDefault=workspace-write (default)',
+      'review.maxRounds=2 (default)',
       `global=${path.join(cfgDir, 'neat', 'config.json')} (missing)`,
       `project=${path.join(proj, '.neat', 'config.json')} (missing)`,
     ]);
@@ -322,6 +360,7 @@ describe('CLI', () => {
     assert.equal(neat(['config', 'get', 'codex.enabled']).stdout, 'auto\n');
     assert.equal(neat(['config', 'get', 'codex.model']).stdout, '(unset)\n');
     assert.equal(neat(['config', 'get', 'codex.sandboxDefault']).stdout, 'workspace-write\n');
+    assert.equal(neat(['config', 'get', 'review.maxRounds']).stdout, '2\n');
     const bad = neat(['config', 'get', 'nope']);
     assert.equal(bad.status, 2);
     assert.match(bad.stderr, /unknown config key 'nope'/);

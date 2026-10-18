@@ -200,7 +200,7 @@ describe('mergeRun sources', () => {
     put(dir, 'review.md', 'src/a.js:1 - high - from claude review file\n', 100);
     put(dir, 'codex-reviewer.md', '## Findings\n- src/a.js:30 - low - from the old codex output\n', 200);
     put(dir, 'report-reviewer-2.md', '## Findings\n- src/b.js:2 - medium - from the second report\n', 50);
-    let result = rm.mergeRun(proj, id);
+    let result = rm.mergeRun(proj, id, { env });
     assert.deepEqual(result.lines, [
       'src/a.js:1 critical [claude] from claude review file (disputed)',
       'src/b.js:2 warning [claude-2] from the second report',
@@ -208,7 +208,7 @@ describe('mergeRun sources', () => {
     put(dir, 'codex-reviewer.md', '## Findings\n- src/a.js:30 - low - from the new codex output\n', 10);
     put(dir, 'review-2.md', 'src/b.js:3 - low - from the second review file\n', 40);
     put(dir, 'codex-reviewer-2.md', 'src/b.js:9 - high - stale codex second\n', 300);
-    result = rm.mergeRun(proj, id);
+    result = rm.mergeRun(proj, id, { env });
     assert.deepEqual(result.lines, [
       'src/a.js:30 info [codex] from the new codex output',
       'src/b.js:3 info [claude-2] from the second review file',
@@ -222,7 +222,7 @@ describe('mergeRun sources', () => {
     const filler = `${'x'.repeat(1023)}\n`.repeat(1024);
     put(dir, 'review.md', `${filler}src/late.js:1 - high - beyond the cap\n`, 10);
     assert.equal(rm.MAX_READ_BYTES, 1024 * 1024);
-    assert.deepEqual(rm.mergeRun(proj, id).lines, []);
+    assert.deepEqual(rm.mergeRun(proj, id, { env }).lines, []);
   });
 });
 
@@ -244,11 +244,12 @@ describe('neat review merge', () => {
     assert.equal(res.status, 0, res.stderr);
     const lines = res.stdout.trimEnd().split('\n');
     assert.ok(lines.length <= 12);
-    assert.equal(lines[0], 'merged critical=2 warning=0 info=6 both=1 disputed=1');
-    assert.equal(lines[1], 'src/db.js:40 critical [both] unchecked input reaches the SQL query');
-    assert.equal(lines[2], 'src/z.js:1 critical [codex] secret in code (disputed)');
-    assert.equal(lines.length, 7);
-    assert.equal(lines[6], `file: ${path.join(dir, 'review-merged.md')}`);
+    assert.equal(lines[0], 'merged critical=2 warning=0 info=6 both=1 disputed=1 round=0/2 next=done');
+    assert.equal(lines[1], 'unowned=src/db.js,src/z.js');
+    assert.equal(lines[2], 'src/db.js:40 critical [both] unchecked input reaches the SQL query');
+    assert.equal(lines[3], 'src/z.js:1 critical [codex] secret in code (disputed)');
+    assert.equal(lines.length, 8);
+    assert.equal(lines[7], `file: ${path.join(dir, 'review-merged.md')}`);
     const saved = fs.readFileSync(path.join(dir, 'review-merged.md'), 'utf8').trimEnd().split('\n');
     assert.equal(saved.length, 8);
     assert.ok(saved.every((l) => !l.startsWith('#')));
@@ -262,14 +263,15 @@ describe('neat review merge', () => {
     put(dir, 'review.md', `src/a.js:1 - high - ${'z'.repeat(400)}\n`, 10);
     const res = neat(['review', 'merge', id]);
     assert.equal(res.status, 0, res.stderr);
-    assert.equal(res.stdout.split('\n')[1].length, 200);
+    assert.equal(res.stdout.split('\n')[1], 'unowned=src/a.js');
+    assert.equal(res.stdout.split('\n')[2].length, 200);
   });
 
   test('no source files gives zero counts and none', () => {
     const { id, dir } = newRun('empty merge');
     const res = neat(['review', 'merge', id]);
     assert.equal(res.status, 0, res.stderr);
-    assert.equal(res.stdout, `merged critical=0 warning=0 info=0 both=0 disputed=0\nnone\nfile: ${path.join(dir, 'review-merged.md')}\n`);
+    assert.equal(res.stdout, `merged critical=0 warning=0 info=0 both=0 disputed=0 round=0/2 next=done\nnone\nfile: ${path.join(dir, 'review-merged.md')}\n`);
     assert.equal(fs.readFileSync(path.join(dir, 'review-merged.md'), 'utf8'), 'none\n');
   });
 
@@ -279,5 +281,173 @@ describe('neat review merge', () => {
     assert.match(res.stderr, /run not found/);
     assert.equal(neat(['review', 'merge']).status, 2);
     assert.equal(neat(['review', 'merge', 'a', 'b']).status, 2);
+  });
+});
+
+// ---------- bounded fix loop ----------
+
+describe('fixFindings, reviewNext and setReview', () => {
+  const tasks = [
+    { id: 'T1', owns: ['src/a.js', 'src/b.js'] },
+    { id: 'T2', owns: ['src/c.js'] },
+    { id: 'T3', owns: ['src/b.js'] },
+    { id: 'D1', owns: ['README.md'] },
+  ];
+  const m = (p, line, severity) => ({ path: p, line, severity, source: 'claude', text: `t ${p}`, disputed: false });
+
+  test('critical and warning findings go to every owning task; info never; unowned paths are listed once', () => {
+    const merged = [
+      m('src/b.js', 1, 'warning'), m('src/a.js', 2, 'critical'), m('src/c.js', 3, 'info'),
+      m('src/z.js', 4, 'warning'), m('src/z.js', 9, 'critical'), m('README.md', 1, 'warning'),
+    ];
+    const res = rm.fixFindings(merged, tasks);
+    assert.deepEqual(res.fixTasks, ['T1', 'T3', 'D1']);
+    assert.deepEqual(res.unowned, ['src/z.js']);
+    assert.deepEqual(res.byTask.T1.map((x) => x.path), ['src/b.js', 'src/a.js']);
+    assert.deepEqual(res.byTask.T3.map((x) => x.path), ['src/b.js']);
+    assert.equal(res.byTask.T2, undefined);
+    assert.deepEqual(rm.fixFindings([m('src/c.js', 1, 'info')], tasks), { fixTasks: [], unowned: [], byTask: {} });
+    assert.deepEqual(rm.fixFindings([m('src/a.js', 1, 'critical')], undefined).unowned, ['src/a.js']);
+  });
+
+  test('reviewNext: done without fix tasks, fix below the bound, then ask (gate, step) or stop (auto)', () => {
+    const next = (fixTasks, fixRounds, maxRounds, mode) => rm.reviewNext({ fixTasks, fixRounds, maxRounds, mode });
+    assert.equal(next([], 0, 2, 'gate'), 'done');
+    assert.equal(next([], 5, 2, 'auto'), 'done');
+    assert.equal(next(['T1'], 0, 2, 'gate'), 'fix');
+    assert.equal(next(['T1'], 1, 2, 'auto'), 'fix');
+    assert.equal(next(['T1'], 2, 2, 'gate'), 'ask');
+    assert.equal(next(['T1'], 2, 2, 'step'), 'ask');
+    assert.equal(next(['T1'], 2, 2, 'auto'), 'stop');
+    assert.equal(next(['T1'], 0, 0, 'gate'), 'ask');
+    assert.equal(next(['T1'], 0, 0, 'auto'), 'stop');
+  });
+
+  test('setReview returns a new state and leaves the input untouched', () => {
+    const state = Object.freeze({ id: 'x', mode: 'gate' });
+    const review = { reviews: 1, fixTasks: ['T1'] };
+    const next = rm.setReview(state, review);
+    assert.notEqual(next, state);
+    assert.equal(state.review, undefined);
+    assert.deepEqual(next, { id: 'x', mode: 'gate', review: { reviews: 1, fixTasks: ['T1'] } });
+    review.fixTasks.push('T2');
+    assert.deepEqual(next.review.fixTasks, ['T1']);
+  });
+});
+
+const LOOP_PLAN = [
+  '## T1: Fix a', 'worker: implementer', 'owns: src/a.js', 'do: fix', '',
+  '## D1: Docs', 'worker: docs', 'owns: README.md', 'do: doc', '',
+].join('\n');
+
+function plannedRun(taskText, runEnv = env, projDir = proj) {
+  const run = (args, input) => runNode([HELPER, ...args], { cwd: projDir, env: runEnv, input });
+  const res = run(['run', 'new', '--stdin'], taskText);
+  assert.equal(res.status, 0, res.stderr);
+  const id = res.stdout.match(/^id=(\S+)/m)[1];
+  const dir = path.join(projDir, '.neat', 'runs', id);
+  fs.writeFileSync(path.join(dir, 'plan.md'), LOOP_PLAN);
+  const check = run(['plan', 'check', id]);
+  assert.equal(check.status, 0, check.stdout);
+  return { id, dir, merge: () => run(['review', 'merge', id]) };
+}
+
+function stateOf(dir) {
+  return JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));
+}
+
+function outLines(res) {
+  assert.equal(res.status, 0, res.stderr);
+  return res.stdout.trimEnd().split('\n');
+}
+
+describe('review merge rounds', () => {
+  test('a gate run counts fix rounds, names the fix tasks and asks after the bound', () => {
+    const { dir, merge } = plannedRun('loop gate');
+    put(dir, 'review.md', 'src/a.js:3 - high - unchecked input reaches the query\n', 30);
+    let lines = outLines(merge());
+    assert.ok(lines[0].startsWith('merged critical=1 warning=0 info=0 '), lines[0]);
+    assert.ok(lines[0].endsWith(' round=0/2 next=fix'), lines[0]);
+    assert.equal(lines[1], 'fix=T1');
+    assert.equal(lines[2], 'src/a.js:3 critical [claude] unchecked input reaches the query');
+    const review = stateOf(dir).review;
+    assert.match(review.inputs, /^[0-9a-f]{64}$/);
+    assert.deepEqual({ ...review, inputs: 'x' }, {
+      reviews: 1, fixRounds: 0, maxRounds: 2, critical: 1, warning: 0, info: 0,
+      fixTasks: ['T1'], unowned: [], inputs: 'x',
+    });
+    const again = merge();
+    assert.equal(again.stdout, merge().stdout);
+    assert.deepEqual(outLines(again), lines);
+    assert.equal(stateOf(dir).review.reviews, 1);
+    put(dir, 'review.md', 'src/a.js:3 - high - input still unchecked before the query\n', 20);
+    lines = outLines(merge());
+    assert.ok(lines[0].endsWith(' round=1/2 next=fix'), lines[0]);
+    put(dir, 'review.md', 'src/a.js:4 - medium - query input is still not validated\n', 10);
+    lines = outLines(merge());
+    assert.ok(lines[0].endsWith(' round=2/2 next=ask'), lines[0]);
+    assert.equal(lines[1], 'fix=T1');
+    assert.deepEqual([stateOf(dir).review.reviews, stateOf(dir).review.fixRounds], [3, 2]);
+  });
+
+  test('an auto run stops after the bound; a step run asks', () => {
+    for (const [mode, last] of [['auto', 'stop'], ['step', 'ask']]) {
+      const { dir, merge } = plannedRun(`--mode ${mode} loop ${mode}`);
+      ['first wording', 'second wording', 'third wording'].forEach((w, i) => {
+        put(dir, 'review.md', `src/a.js:3 - medium - ${w} of the issue\n`, 30 - i * 10);
+        const lines = outLines(merge());
+        const expected = i < 2 ? `round=${i}/2 next=fix` : `round=2/2 next=${last}`;
+        assert.ok(lines[0].endsWith(` ${expected}`), `${mode}: ${lines[0]}`);
+        assert.equal(lines[1], 'fix=T1');
+      });
+    }
+  });
+
+  test('info-only findings and unowned files give next=done without a fix line', () => {
+    const info = plannedRun('loop info');
+    put(info.dir, 'review.md', 'src/a.js:3 - low - naming\n', 10);
+    let lines = outLines(info.merge());
+    assert.ok(lines[0].endsWith(' round=0/2 next=done'), lines[0]);
+    assert.ok(!lines.some((l) => l.startsWith('fix=')));
+    assert.ok(!lines.some((l) => l.startsWith('unowned=')));
+    const other = plannedRun('loop unowned');
+    put(other.dir, 'review.md', 'src/z.js:1 - medium - not owned\nsrc/a.js:2 - low - naming\n', 10);
+    lines = outLines(other.merge());
+    assert.ok(lines[0].endsWith(' round=0/2 next=done'), lines[0]);
+    assert.equal(lines[1], 'unowned=src/z.js');
+    assert.deepEqual(stateOf(other.dir).review.unowned, ['src/z.js']);
+    assert.deepEqual(stateOf(other.dir).review.fixTasks, []);
+  });
+
+  test('review.maxRounds 0 asks (gate) or stops (auto) on the first merge', () => {
+    const proj0 = makeTempDir('neat-merge0-');
+    try {
+      fs.mkdirSync(path.join(proj0, '.neat'), { recursive: true });
+      fs.writeFileSync(path.join(proj0, '.neat', 'config.json'), JSON.stringify({ review: { maxRounds: 0 } }));
+      const env0 = childEnv({ NEAT_PROJECT_DIR: proj0, NEAT_NOW: '2026-10-18T12:34:56Z' });
+      for (const [mode, last] of [['gate', 'ask'], ['auto', 'stop']]) {
+        const { dir, merge } = plannedRun(`--mode ${mode} zero rounds ${mode}`, env0, proj0);
+        put(dir, 'review.md', 'src/a.js:3 - high - bad\n', 10);
+        const lines = outLines(merge());
+        assert.ok(lines[0].endsWith(` round=0/0 next=${last}`), lines[0]);
+        assert.equal(lines[1], 'fix=T1');
+      }
+    } finally {
+      removeDir(proj0);
+    }
+  });
+
+  test('stdout stays at most 12 lines in the order first line, fix=, unowned=, top lines, file:', () => {
+    const { dir, merge } = plannedRun('loop many');
+    const many = Array.from({ length: 20 }, (_, i) => `src/a.js:${i * 10 + 1} - high - issue number ${i}`);
+    put(dir, 'review.md', `${many.join('\n')}\nsrc/q.js:1 - medium - elsewhere\n`, 10);
+    const lines = outLines(merge());
+    assert.ok(lines.length <= 12, `${lines.length}`);
+    assert.equal(lines.length, 9);
+    assert.ok(lines[0].endsWith(' round=0/2 next=fix'));
+    assert.equal(lines[1], 'fix=T1');
+    assert.equal(lines[2], 'unowned=src/q.js');
+    assert.ok(lines[3].startsWith('src/a.js:'));
+    assert.ok(lines[8].startsWith('file: '));
   });
 });
