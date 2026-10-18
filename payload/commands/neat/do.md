@@ -39,6 +39,9 @@ On success the first line is `id={id} mode={mode} dir={dir}`; keep these values.
 ## Explore
 Run `node {{NEAT_BIN}} run stage {id} explore`, then the Worker loop with W = `explorer` and no G.
 
+## Classify
+From the explorer report rate the task: `trivial` (one small, obvious change), `risky` (security, data loss, concurrency, public interfaces or many files) or `normal`. Run `node {{NEAT_BIN}} run classify {id} {complexity}`; later briefs route from it.
+
 ## Plan
 Run `node {{NEAT_BIN}} run stage {id} plan`. Using only the task text and the explorer report, write the plan:
 

@@ -21,11 +21,13 @@ const HELP = [
   'neat run new [--stdin] [--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [task]',
   'neat run stage <run-id> <explore|plan|implement|review|test|docs|done|cancelled>',
   'neat run worker <run-id> <name> <running|done|failed|report-invalid>',
+  'neat run classify <run-id> <trivial|normal|risky>',
   'neat run guard <run-id> [--tasks T1,T2]',
   'neat run diff <run-id>',
   'neat run commit <run-id>',
   'neat plan check <run-id>',
   'neat brief <run-id> <worker> [--stdin]',
+  'neat route <run-id> <worker|--all>',
   'neat write <run-id> <file-name> --stdin',
   'neat report check <file>',
   'neat config show [<run-id>]',
@@ -83,6 +85,30 @@ function cmdRunWorker(args) {
   const next = runState.setWorker(state, name, status, report);
   runState.saveRun(root, next, runState.currentTime(process.env));
   out(`worker ${name} ${status}`);
+  return 0;
+}
+
+function cmdRunClassify(args) {
+  if (args.length !== 2) throw new UsageError('usage: neat run classify <run-id> <trivial|normal|risky>');
+  const [id, level] = args;
+  const root = runState.projectRoot(process.env, process.cwd());
+  const state = runState.loadRun(root, id);
+  runState.saveRun(root, runState.setComplexity(state, level), runState.currentTime(process.env));
+  out(`complexity ${level}`);
+  return 0;
+}
+
+// Prints route lines without changing the run, then env override notes.
+function cmdRoute(args) {
+  if (args.length !== 2) throw new UsageError('usage: neat route <run-id> <worker|--all>');
+  const [id, target] = args;
+  if (target !== '--all') route.assertRoutable(target);
+  const root = runState.projectRoot(process.env, process.cwd());
+  const state = runState.loadRun(root, id);
+  const now = runState.currentTime(process.env);
+  const workers = target === '--all' ? route.ROLES : [target];
+  workers.forEach((w) => out(route.formatRoute(route.routeWorker(root, state, w, process.env, now))));
+  route.envNotes(process.env).forEach((line) => out(line));
   return 0;
 }
 
@@ -191,12 +217,14 @@ function dispatch(argv) {
   if (cmd === 'run' && sub === 'new') return cmdRunNew(rest);
   if (cmd === 'run' && sub === 'stage') return cmdRunStage(rest);
   if (cmd === 'run' && sub === 'worker') return cmdRunWorker(rest);
+  if (cmd === 'run' && sub === 'classify') return cmdRunClassify(rest);
   if (cmd === 'run' && sub === 'guard') return cmdRunGuard(rest);
   if (cmd === 'run' && sub === 'diff') return cmdRunDiff(rest);
   if (cmd === 'run' && sub === 'commit') return cmdRunCommit(rest);
   if (cmd === 'plan' && sub === 'check') return cmdPlanCheck(rest);
   if (cmd === 'brief') return cmdBrief(argv.slice(1));
   if (cmd === 'config') return cmdConfig(sub, rest);
+  if (cmd === 'route') return cmdRoute(argv.slice(1));
   if (cmd === 'status') return cmdStatus(argv.slice(1));
   if (cmd === 'write') return cmdWrite(argv.slice(1));
   if (cmd === 'report' && sub === 'check') return cmdReportCheck(rest);

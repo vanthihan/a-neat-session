@@ -10,6 +10,7 @@ const PIPELINE = Object.freeze(['explore', 'plan', 'implement', 'review', 'test'
 const STAGES = Object.freeze([...PIPELINE, 'done', 'cancelled']);
 const WORKER_NAME = /^(explorer|reviewer|tester|implementer-T\d+|docs-D\d+)$/;
 const WORKER_STATUSES = Object.freeze(['running', 'done', 'failed', 'report-invalid']);
+const COMPLEXITIES = Object.freeze(['trivial', 'normal', 'risky']);
 const RUN_ID = /^\d{8}-\d{6}-[a-z0-9-]{1,48}$/;
 const RUN_FILE_NAME = /^[a-z][A-Za-z0-9-]*\.(md|txt|patch|json)$/;
 const MAX_FILE_NAME = 80;
@@ -170,6 +171,12 @@ function setStage(state, stage) {
   return { ...state, stage, stages };
 }
 
+// Pure: returns a new state with the task complexity set.
+function setComplexity(state, level) {
+  assertOneOf('complexity', level, COMPLEXITIES);
+  return { ...state, complexity: level };
+}
+
 // Pure: adds or updates the worker entry `name`. Other fields of an existing
 // entry are kept; `extra` (for example { model, effort }) is merged last.
 function setWorker(state, name, status, report, extra = {}) {
@@ -227,6 +234,7 @@ module.exports = {
   STAGES,
   WORKER_NAME,
   WORKER_STATUSES,
+  COMPLEXITIES,
   projectRoot,
   runsDir,
   runDir,
@@ -238,6 +246,7 @@ module.exports = {
   loadRun,
   saveRun,
   setStage,
+  setComplexity,
   setWorker,
   listRuns,
   writeRunFile,

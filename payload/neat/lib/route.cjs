@@ -7,10 +7,11 @@
 
 const os = require('node:os');
 const { effectiveConfig } = require('./config.cjs');
+const { UsageError } = require('./cli-args.cjs');
+const { COMPLEXITIES, WORKER_NAME } = require('./run-state.cjs');
 
 const TIERS = Object.freeze(['haiku', 'sonnet', 'opus']);
 const ROLES = Object.freeze(['explorer', 'researcher', 'implementer', 'reviewer', 'tester', 'docs']);
-const COMPLEXITY_LEVELS = Object.freeze(['trivial', 'normal', 'risky']);
 const DEFAULT_COMPLEXITY = 'normal';
 const DEFAULT_SOFT = 70;
 
@@ -95,11 +96,37 @@ function formatRoute(r) {
 function routeWorker(root, state, worker, env = process.env, now = new Date(), home = os.homedir()) {
   const cfg = effectiveConfig({ root, env, home, state });
   const profile = cfg.profile;
-  const complexity = COMPLEXITY_LEVELS.includes(state.complexity) ? state.complexity : DEFAULT_COMPLEXITY;
+  const complexity = COMPLEXITIES.includes(state.complexity) ? state.complexity : DEFAULT_COMPLEXITY;
   const usage = null;
   const ctx = null;
   const r = routeFor({ role: roleOf(worker), profile, complexity, usage, soft: cfg.thresholds.soft });
   return { worker, model: r.model, effort: r.effort, profile, complexity, usage, stepdown: r.stepdown, hard: false, ctx };
 }
 
-module.exports = { TIERS, ROLES, roleOf, routeFor, formatRoute, routeWorker };
+// `neat route` accepts any run worker name or a bare role.
+function assertRoutable(worker) {
+  const ok = typeof worker === 'string' && (WORKER_NAME.test(worker) || ROLES.includes(worker));
+  if (!ok) {
+    throw new UsageError(`invalid worker '${worker}' (use ${ROLES.join('|')}|implementer-T<n>|docs-D<n>|--all)`);
+  }
+}
+
+const SAFE_ENV_VALUE = /^[A-Za-z0-9._-]{1,32}$/;
+
+function shown(value) {
+  return SAFE_ENV_VALUE.test(value) ? value : '(set)';
+}
+
+// Notes for environment variables that override the per-call model or effort.
+function envNotes(env = process.env) {
+  const notes = [];
+  const effort = env.CLAUDE_CODE_EFFORT_LEVEL;
+  if (effort) notes.push(`note: CLAUDE_CODE_EFFORT_LEVEL=${shown(effort)} overrides the routed effort`);
+  const force = env.CLAUDE_CODE_SUBAGENT_MODEL_FORCE;
+  if (force && force !== '0' && force.toLowerCase() !== 'false') {
+    notes.push(`note: CLAUDE_CODE_SUBAGENT_MODEL_FORCE=${shown(force)} overrides the routed model`);
+  }
+  return notes;
+}
+
+module.exports = { TIERS, ROLES, roleOf, routeFor, formatRoute, routeWorker, envNotes, assertRoutable };

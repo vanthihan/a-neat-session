@@ -15,13 +15,13 @@ const HELPER = path.join(REPO_ROOT, 'payload', 'neat', 'bin', 'neat.cjs');
 const MAX_DESCRIPTION = 200;
 const MAX_BODY_WORDS = 1500;
 const DO_SECTIONS = [
-  '## Rules', '## Worker loop', '## Start', '## Explore', '## Plan', '## Approve',
+  '## Rules', '## Worker loop', '## Start', '## Explore', '## Classify', '## Plan', '## Approve',
   '## Implement', '## Review', '## Test', '## Docs', '## Commit', '## Finish',
 ];
 const DO_MENTIONS = [
   'neat-explorer', 'neat-implementer', 'neat-reviewer', 'neat-tester', 'neat-docs',
   'Brief: ', 'subagent_type', 'AskUserQuestion', 'SendMessage', 'untrusted',
-  'run commit', 'plan check', 'run guard', 'gate', 'auto', 'step',
+  'run commit', 'plan check', 'run guard', 'run classify', 'gate', 'auto', 'step',
   'must not contain a line NEAT_EOF',
 ];
 const BIN_CALL = /node \{\{NEAT_BIN\}\}( [^`\n]*)?/g;
@@ -111,7 +111,7 @@ describe('do.md', () => {
     assert.deepEqual(lines.filter((l) => l.startsWith('!') && l.includes('$ARGUMENTS')), []);
   });
 
-  test('H2 sections are exactly the twelve stages, in order', () => {
+  test('H2 sections are exactly the thirteen sections, in order', () => {
     assert.deepEqual(lines.filter((l) => l.startsWith('## ')), DO_SECTIONS);
   });
 

@@ -8,9 +8,12 @@ const { spawnSync } = require('node:child_process');
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 
-// Env vars that, when inherited from the session running the tests,
-// could point helpers or the installer at real directories.
-const SCRUBBED_ENV = ['CLAUDE_PROJECT_DIR', 'CLAUDE_CONFIG_DIR', 'NEAT_PROJECT_DIR', 'NEAT_NOW'];
+// Env vars that, when inherited from the session running the tests, could
+// point helpers or the installer at real directories or change route output.
+const SCRUBBED_ENV = [
+  'CLAUDE_PROJECT_DIR', 'CLAUDE_CONFIG_DIR', 'NEAT_PROJECT_DIR', 'NEAT_NOW',
+  'CLAUDE_CODE_EFFORT_LEVEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE',
+];
 
 // One empty CLAUDE_CONFIG_DIR per test process, created on first use and
 // removed on exit, so helper children never read the developer's real
