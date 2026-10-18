@@ -57,12 +57,19 @@ function jobPaths(root, runId, jobId, worker) {
   };
 }
 
-// <worker>-<4 hex>, regenerated while a record with that id exists.
-function makeJobId(root, runId, worker) {
+function randomSuffix() {
+  return crypto.randomBytes(ID_HEX_BYTES).toString('hex');
+}
+
+// <worker>-<4 hex>, regenerated while any run has a record with that id, so
+// an id names one job across all runs (findJob looks it up in every run).
+function makeJobId(root, runId, worker, { randomHex = randomSuffix } = {}) {
+  assertRun(runId);
+  const runs = [runId, ...runIdsNewestFirst(root).filter((r) => r !== runId)];
   for (;;) {
-    const id = `${String(worker).toLowerCase()}-${crypto.randomBytes(ID_HEX_BYTES).toString('hex')}`;
+    const id = `${String(worker).toLowerCase()}-${randomHex()}`;
     assertJobId(id);
-    if (!fs.existsSync(jobFile(root, runId, id))) return id;
+    if (!runs.some((r) => fs.existsSync(jobFile(root, r, id)))) return id;
   }
 }
 
@@ -121,14 +128,16 @@ function runIdsNewestFirst(root) {
     .reverse();
 }
 
-// Scans the runs newest first; throws a UsageError when no run has the job.
+// Scans every run; throws a UsageError when no run has the job, or when more
+// than one does (acting on the wrong run's job could cancel a live one).
 function findJob(root, jobId) {
   assertJobId(jobId);
-  for (const runId of runIdsNewestFirst(root)) {
-    const record = readJob(root, runId, jobId);
-    if (record) return record;
+  const found = runIdsNewestFirst(root).map((runId) => readJob(root, runId, jobId)).filter(Boolean);
+  if (found.length === 0) throw new UsageError(`job not found: ${jobId}`);
+  if (found.length > 1) {
+    throw new UsageError(`job id ${jobId} is in more than one run: ${found.map((r) => r.runId).join(', ')}`);
   }
-  throw new UsageError(`job not found: ${jobId}`);
+  return found[0];
 }
 
 // Records of one run, newest first (by the prompt file's write time). With

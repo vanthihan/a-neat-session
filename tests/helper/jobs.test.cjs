@@ -68,6 +68,37 @@ describe('ids and lookup', () => {
     assert.equal(jobs.latestJob(root).id, 'reviewer-bbbb');
     assert.deepEqual(jobs.listJobs(root).map((r) => r.id), ['reviewer-bbbb', 'reviewer-aaaa']);
   });
+
+  test('a new job id is unique across every run, not just its own', () => {
+    const own = makeTempDir('neat-jobs-ids-');
+    try {
+      for (const id of [RUN_A, RUN_B]) fs.mkdirSync(path.join(own, '.neat', 'runs', id), { recursive: true });
+      const write = (runId, id) => {
+        const dir = path.join(own, '.neat', 'runs', runId, 'jobs');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, `${id}.json`), '{}');
+      };
+      write(RUN_B, 'reviewer-aaaa');
+      const draws = ['aaaa', 'bbbb'];
+      assert.equal(jobs.makeJobId(own, RUN_A, 'reviewer', { randomHex: () => draws.shift() }), 'reviewer-bbbb');
+    } finally {
+      removeDir(own);
+    }
+  });
+
+  test('findJob refuses an id that more than one run holds', () => {
+    const own = makeTempDir('neat-jobs-dup-');
+    try {
+      for (const id of [RUN_A, RUN_B]) fs.mkdirSync(path.join(own, '.neat', 'runs', id), { recursive: true });
+      const rec = (runId) => ({ ...record(runId, 'reviewer-dddd'), root: own });
+      jobs.writeJob(own, rec(RUN_A));
+      jobs.writeJob(own, rec(RUN_B));
+      assert.throws(() => jobs.findJob(own, 'reviewer-dddd'),
+        (err) => err instanceof UsageError && /more than one run/.test(err.message));
+    } finally {
+      removeDir(own);
+    }
+  });
 });
 
 describe('records are untrusted input', () => {
