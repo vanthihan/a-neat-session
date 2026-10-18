@@ -116,7 +116,7 @@ describe('do.md', () => {
 
   test('every helper call names a subcommand listed by neat help', () => {
     const known = helpSubcommands();
-    const calls = [...text.matchAll(BIN_CALL)].map((m) => (m[1] || '').trim());
+    const calls = [...body.matchAll(BIN_CALL)].map((m) => (m[1] || '').trim());
     assert.ok(calls.length >= 10, `only ${calls.length} helper calls`);
     for (const call of calls) {
       const words = call.split(/\s+/);
