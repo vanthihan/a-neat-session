@@ -22,6 +22,9 @@ const codex = require('./codex.cjs');
 const jobs = require('./jobs.cjs');
 
 const POLL_MS = 200;
+// How long a `.end` claim may stay without a terminal status before a wait
+// takes it for an owner that died mid-write.
+const STALE_END_MS = 5000;
 // How long the wrapper waits for startJob to record its pid.
 const OWN_RECORD_WAIT_MS = 10000;
 const OWN_RECORD_POLL_MS = 20;
@@ -280,13 +283,19 @@ function lostPatch() {
   return { status: 'failed', exitCode: null, note: 'lost', endedAt: nowIso() };
 }
 
-// Current record of a job; a running job whose process is gone becomes failed/lost.
+// Current record of a job; a running job whose process is gone becomes
+// failed/lost. When another party holds the `.end` claim (cancel, a wrapper
+// finishing), its terminal write wins: the record is only forced to
+// failed/lost once that claim is older than STALE_END_MS, i.e. its owner died
+// mid-write.
 function settle(root, record) {
   const current = jobs.readJob(root, record.runId, record.id) || record;
   if (jobs.isTerminal(current) || jobs.isAlive(current)) return current;
   const after = jobs.finishJob(root, current, lostPatch());
   if (jobs.isTerminal(after)) return after;
-  return jobs.writeJob(root, { ...after, ...lostPatch() }); // its owner died mid-write
+  const age = jobs.endAgeMs(root, after);
+  if (age === null || age < STALE_END_MS) return after;
+  return jobs.writeJob(root, { ...after, ...lostPatch() });
 }
 
 // Resolves { records, timedOut } once every job ended or at the deadline.

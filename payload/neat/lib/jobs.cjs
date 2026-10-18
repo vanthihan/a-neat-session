@@ -9,7 +9,9 @@
 // binary and exec settings never come from a record (see job-runner).
 // The terminal status is written by exactly one party: whoever first creates
 // the job's `.end` marker (the wrapper, cancel, or a wait that found the job
-// lost), so a cancelled job can never flip back to done or failed.
+// lost), so a cancelled job can never flip back to done or failed. The one
+// exception is a claim left without a terminal status for several seconds
+// (its owner died mid-write): a wait then records the job as lost.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -230,6 +232,15 @@ function claimEnd(root, record) {
   }
 }
 
+// Milliseconds since the job's `.end` marker was created, or null without one.
+function endAgeMs(root, record, now = Date.now()) {
+  try {
+    return now - fs.statSync(jobFile(root, record.runId, record.id, '.end')).mtimeMs;
+  } catch {
+    return null;
+  }
+}
+
 // Writes the terminal `patch` when this caller wins the claim; returns the
 // record now on disk.
 function finishJob(root, record, patch) {
@@ -255,5 +266,6 @@ module.exports = {
   isTerminal,
   isAlive,
   claimEnd,
+  endAgeMs,
   finishJob,
 };

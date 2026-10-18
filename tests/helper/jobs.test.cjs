@@ -139,6 +139,38 @@ describe('records are untrusted input', () => {
   });
 });
 
+describe('settling a lost job', () => {
+  const runner = require(path.join(LIB, 'job-runner.cjs'));
+
+  function endFile(runId, id) {
+    return path.join(root, '.neat', 'runs', runId, 'jobs', `${id}.end`);
+  }
+
+  test('a fresh .end claim held by another party is never overwritten with failed/lost', async () => {
+    jobs.writeJob(root, record(RUN_A, 'reviewer-c1a1', { pid: exitedPid(), pgid: null }));
+    fs.writeFileSync(endFile(RUN_A, 'reviewer-c1a1'), '');
+    const waited = await runner.waitJobs(root, ['reviewer-c1a1'], { timeoutMs: 300, pollMs: 50 });
+    assert.equal(waited.timedOut, true);
+    assert.equal(jobs.readJob(root, RUN_A, 'reviewer-c1a1').status, 'running');
+    const rec = jobs.readJob(root, RUN_A, 'reviewer-c1a1');
+    jobs.writeJob(root, { ...rec, status: 'cancelled' }); // the claimant (cancel) finishes its write
+    const after = await runner.waitJobs(root, ['reviewer-c1a1'], { timeoutMs: 300, pollMs: 50 });
+    assert.equal(after.records[0].status, 'cancelled');
+    assert.equal(jobs.readJob(root, RUN_A, 'reviewer-c1a1').status, 'cancelled');
+  });
+
+  test('a stale .end claim without a terminal status becomes failed/lost', async () => {
+    jobs.writeJob(root, record(RUN_A, 'reviewer-c2a2', { pid: exitedPid(), pgid: null }));
+    const marker = endFile(RUN_A, 'reviewer-c2a2');
+    fs.writeFileSync(marker, '');
+    const old = new Date(Date.now() - 60 * 1000);
+    fs.utimesSync(marker, old, old);
+    const waited = await runner.waitJobs(root, ['reviewer-c2a2'], { timeoutMs: 1000, pollMs: 50 });
+    assert.equal(waited.timedOut, false);
+    assert.deepEqual([waited.records[0].status, waited.records[0].note], ['failed', 'lost']);
+  });
+});
+
 describe('isAlive', () => {
   let child;
 
