@@ -217,6 +217,14 @@ describe('preBash', () => {
     assert.equal(call(bash('npm test')), '');
   });
 
+  test('a state.json holding null in another run does not stop the filter', () => {
+    const { id } = newRun();
+    const broken = rs.createRun(root, { task: 'broken', mode: 'gate' }, hoursAgo(1));
+    fs.writeFileSync(path.join(rs.runDir(root, broken.id), 'state.json'), 'null');
+    const cmd = JSON.parse(call(bash('npm test'))).hookSpecificOutput.updatedInput.command;
+    assert.ok(cmd.includes(` filter ${id} test `), cmd);
+  });
+
   test('a project root outside the shell-safe charset is never rewritten', () => {
     const spaced = path.join(tmp, 'my proj');
     fs.mkdirSync(spaced);

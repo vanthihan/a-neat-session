@@ -512,6 +512,24 @@ test('activeRuns keeps unfinished runs updated within 24 hours, newest update fi
   }
 });
 
+test('a state.json holding null, a number, a string or an array is reported, not thrown', () => {
+  const own = makeTempDir('neat-state-nonobject-');
+  try {
+    const good = rs.createRun(own, { task: 'good', mode: 'gate' }, NOW);
+    const bad = ['null', '42', '"text"', '[]', 'true'].map((json, i) => {
+      const run = rs.createRun(own, { task: `bad ${i}`, mode: 'gate' }, NOW);
+      fs.writeFileSync(path.join(rs.runDir(own, run.id), 'state.json'), json);
+      return run.id;
+    });
+    const listed = rs.listRuns(own);
+    for (const id of bad) assert.deepEqual(listed.find((s) => s && s.id === id), { id, error: 'unreadable state' }, id);
+    assert.deepEqual(rs.activeRuns(own, NOW).map((s) => s.id), [good.id]);
+    for (const id of bad) assert.throws(() => rs.loadRun(own, id), (e) => e instanceof UsageError && /unreadable state/.test(e.message));
+  } finally {
+    removeDir(own);
+  }
+});
+
 test('setting the running stage again keeps it running', () => {
   const state = rs.setStage(rs.setStage({ id: 'x', stage: 'created', stages: [{ name: 'explore', status: 'pending' }] }, 'explore'), 'explore');
   assert.equal(state.stage, 'explore');

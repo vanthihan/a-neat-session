@@ -160,11 +160,19 @@ function createRun(root, { task, mode, profile, research, tmux, sessionId }, now
   return state;
 }
 
+// A parsed state.json is usable only as a plain object (not null, an array
+// or a scalar).
+function isStateObject(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function loadRun(root, id) {
   assertRunId(id);
   const file = path.join(runDir(root, id), 'state.json');
   if (!fs.existsSync(file)) throw new UsageError(`run not found: ${id}`);
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
+  const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+  if (!isStateObject(state)) throw new UsageError(`unreadable state: ${id}`);
+  return state;
 }
 
 function saveRun(root, state, now = currentTime()) {
@@ -280,10 +288,12 @@ function listRuns(root) {
     .reverse()
     .map((id) => {
       try {
-        return JSON.parse(fs.readFileSync(path.join(runDir(root, id), 'state.json'), 'utf8'));
+        const state = JSON.parse(fs.readFileSync(path.join(runDir(root, id), 'state.json'), 'utf8'));
+        if (isStateObject(state)) return state;
       } catch {
-        return { id, error: 'unreadable state' };
+        // reported below
       }
+      return { id, error: 'unreadable state' };
     });
 }
 
