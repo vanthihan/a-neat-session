@@ -262,6 +262,35 @@ describe('installer --orchestrator-default', () => {
     assert.deepEqual(fs.readdirSync(target), ['settings.local.json']);
   });
 
+  test('a foreign orchestrator agent file or directory aborts the opt-in before any write', () => {
+    const agentFile = path.join(target, 'agents', 'neat-orchestrator.md');
+    fs.mkdirSync(path.dirname(agentFile), { recursive: true });
+    fs.writeFileSync(agentFile, 'my own agent\n');
+    const res = runLocal(['--orchestrator-default']);
+    assert.equal(res.status, 1);
+    assert.ok(res.stderr.includes('agents/neat-orchestrator.md'), res.stderr);
+    assert.ok(!fs.existsSync(localSettings), 'no settings written');
+    assert.ok(!fs.existsSync(path.join(target, 'neat')), 'nothing installed');
+    assert.equal(fs.readFileSync(agentFile, 'utf8'), 'my own agent\n');
+
+    fs.rmSync(agentFile);
+    fs.mkdirSync(agentFile);
+    const dir = runLocal(['--orchestrator-default']);
+    assert.equal(dir.status, 1);
+    assert.ok(dir.stderr.includes('agents/neat-orchestrator.md'), dir.stderr);
+    assert.ok(!fs.existsSync(localSettings), 'no settings written');
+  });
+
+  test('--force replaces a foreign orchestrator agent file and sets agent', () => {
+    const agentFile = path.join(target, 'agents', 'neat-orchestrator.md');
+    fs.mkdirSync(path.dirname(agentFile), { recursive: true });
+    fs.writeFileSync(agentFile, 'my own agent\n');
+    ok(runLocal(['--orchestrator-default', '--force']));
+    assert.equal(readJson(localSettings).agent, AGENT);
+    assert.ok(fs.readFileSync(agentFile, 'utf8').includes('procedure'));
+    assert.equal(fs.readFileSync(`${agentFile}.neat-old`, 'utf8'), 'my own agent\n');
+  });
+
   test('--global --orchestrator-default warns on stderr and succeeds', () => {
     const res = ok(runGlobal(['--orchestrator-default']));
     assert.ok(res.stderr.includes(GLOBAL_WARNING), res.stderr);

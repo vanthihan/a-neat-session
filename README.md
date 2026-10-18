@@ -487,6 +487,9 @@ commands keep working.
 - Try it first without changing settings: `claude --agent neat-orchestrator`.
 - Re-installing without the flag keeps the setting; `--uninstall` puts the
   previous `agent` value back.
+- If `agents/neat-orchestrator.md` already exists in that scope and was not
+  installed by a-neat-session, the installer stops before writing anything
+  instead of pointing `agent` at your file. Remove it or re-run with `--force`.
 
 ## Run files
 
