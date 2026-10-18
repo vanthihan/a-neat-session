@@ -123,14 +123,24 @@ function record(ctx, runId, job) {
   return JSON.parse(fs.readFileSync(path.join(ctx.proj, '.neat', 'runs', runId, 'jobs', `${job}.json`), 'utf8'));
 }
 
-// "<session> <window index> <window name> <pane pid>" for every window of the test server.
+// "<session> <window index> <window id> <window name> <pane pid>" for every window of the test server.
 function windows(ctx) {
-  const res = tmux(ctx, ['list-windows', '-a', '-F', '#{session_name} #{window_index} #{window_name} #{pane_pid}']);
+  const format = '#{session_name} #{window_index} #{window_id} #{window_name} #{pane_pid}';
+  const res = tmux(ctx, ['list-windows', '-a', '-F', format]);
   if (res.status !== 0) return [];
   return res.stdout.trim().split('\n').filter(Boolean).map((l) => {
-    const [session, index, name, pid] = l.split(' ');
-    return { session, index, name, pid: Number(pid) };
+    const [session, index, id, name, pid] = l.split(' ');
+    return { session, index, id, name, pid: Number(pid) };
   });
+}
+
+// TMUX value that makes the helper act as if run inside session `keep`.
+function insideKeep(ctx) {
+  const info = tmux(ctx, ['display-message', '-p', '-t', '=keep:', '#{socket_path},#{pid}']);
+  assert.equal(info.status, 0, info.stderr);
+  const sid = tmux(ctx, ['list-sessions', '-F', '#{session_name} #{session_id}']).stdout
+    .split('\n').find((l) => l.startsWith('keep ')).split('$')[1];
+  return { TMUX: `${info.stdout.trim()},${sid}` };
 }
 
 function sessions(ctx) {
@@ -155,7 +165,8 @@ test('outside tmux: a detached session neat-<run> runs the job in a window and k
     assert.equal(win.session, `neat-${id}`);
     const rec = record(ctx, id, run.job);
     assert.equal(rec.mode, 'tmux');
-    assert.equal(rec.tmuxTarget, `neat-${id}:${win.index}`);
+    assert.equal(rec.tmuxTarget, win.id);
+    assert.match(rec.tmuxTarget, /^@\d+$/);
     assert.equal(rec.pid, run.pid);
     assert.equal(rec.pgid, run.pid);
     assert.equal(win.pid, run.pid);
@@ -207,11 +218,7 @@ test('/neat:do --tmux (state.tmux) makes codex run use tmux without the flag', O
 
 test('inside tmux: a new window opens in the current session and no attach line is printed', OPTS, () => {
   withTmux({}, (ctx) => {
-    const info = tmux(ctx, ['display-message', '-p', '-t', '=keep:', '#{socket_path},#{pid}']);
-    assert.equal(info.status, 0, info.stderr);
-    const sid = tmux(ctx, ['list-sessions', '-F', '#{session_name} #{session_id}']).stdout
-      .split('\n').find((l) => l.startsWith('keep ')).split('$')[1];
-    const inside = { TMUX: `${info.stdout.trim()},${sid}` };
+    const inside = insideKeep(ctx);
     const { id } = newRun(ctx, 'inside tmux');
     brief(ctx, id, 'reviewer');
     const run = codexRun(ctx, [id, 'reviewer', '--tmux'], inside);
@@ -220,7 +227,7 @@ test('inside tmux: a new window opens in the current session and no attach line 
     const win = windows(ctx).find((w) => w.name === `neat-${run.job}`);
     assert.ok(win, JSON.stringify(windows(ctx)));
     assert.equal(win.session, 'keep');
-    assert.equal(record(ctx, id, run.job).tmuxTarget, `keep:${win.index}`);
+    assert.equal(record(ctx, id, run.job).tmuxTarget, win.id);
     assert.ok(!sessions(ctx).includes(`neat-${id}`));
     assert.equal(neat(ctx, ['codex', 'wait', run.job]).stdout, `job ${run.job} status=done exit=0 worker=reviewer\n`);
   });
@@ -263,6 +270,45 @@ test('a project path holding tmux format syntax runs no command and the job stil
   } finally {
     removeDir(outer);
   }
+});
+
+test('cancel after a window renumber closes the job window, never the window now at its old index', OPTS, () => {
+  withTmux({ FAKE_CODEX_DELAY_MS: '10000' }, (ctx) => {
+    assert.equal(tmux(ctx, ['set-option', '-g', 'renumber-windows', 'on']).status, 0);
+    assert.equal(tmux(ctx, ['new-window', '-d', '-t', '=keep:', '-n', 'filler', '--', ...KEEP_CMD]).status, 0);
+    const { id, dir } = newRun(ctx, 'renumbered windows');
+    brief(ctx, id, 'reviewer');
+    const run = codexRun(ctx, [id, 'reviewer', '--tmux'], insideKeep(ctx));
+    const out = path.join(dir, 'codex-reviewer.md');
+    const call = until(() => calls(ctx).find((c) => c.argv[0] === 'exec' && c.argv.includes(out)), 5000);
+    assert.ok(call, 'fake codex must have started');
+    const jobIndex = windows(ctx).find((w) => w.name === `neat-${run.job}`).index;
+    assert.equal(tmux(ctx, ['new-window', '-d', '-t', '=keep:', '-n', 'editor', '--', ...KEEP_CMD]).status, 0);
+    assert.equal(tmux(ctx, ['kill-window', '-t', '=keep:filler']).status, 0);
+    const editor = windows(ctx).find((w) => w.name === 'editor');
+    assert.equal(editor.index, jobIndex, 'the editor now sits at the job window\'s old index');
+
+    const res = neat(ctx, ['codex', 'cancel', run.job]);
+    assert.equal(res.stdout, `job ${run.job} cancelled\n`);
+    assert.ok(until(() => !windows(ctx).some((w) => w.name === `neat-${run.job}`), 3000), 'job window must be gone');
+    assert.ok(windows(ctx).some((w) => w.id === editor.id), 'the editor window must survive');
+    assert.ok(until(() => !alive(call.pid), 5000), 'codex must stop');
+  });
+});
+
+test('cancel leaves a window alone when the recorded window id is no longer the job window', OPTS, () => {
+  withTmux({ FAKE_CODEX_DELAY_MS: '10000' }, (ctx) => {
+    const { id, dir } = newRun(ctx, 'foreign window id');
+    brief(ctx, id, 'reviewer');
+    const run = codexRun(ctx, [id, 'reviewer', '--tmux']);
+    const keepWin = windows(ctx).find((w) => w.session === 'keep');
+    const file = path.join(dir, 'jobs', `${run.job}.json`);
+    const rec = JSON.parse(fs.readFileSync(file, 'utf8'));
+    fs.writeFileSync(file, JSON.stringify({ ...rec, tmuxTarget: keepWin.id }));
+    const res = neat(ctx, ['codex', 'cancel', run.job]);
+    assert.equal(res.stdout, `job ${run.job} cancelled\n`);
+    assert.ok(windows(ctx).some((w) => w.id === keepWin.id), 'a window not named for the job is never killed');
+  });
 });
 
 test('without tmux on PATH the job runs in the background with a note', OPTS, () => {

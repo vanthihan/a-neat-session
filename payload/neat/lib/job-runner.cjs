@@ -25,7 +25,10 @@ const OWN_RECORD_WAIT_MS = 10000;
 const OWN_RECORD_POLL_MS = 20;
 const PRIVATE_MODE = 0o600;
 const TMUX_TIMEOUT_MS = 10000;
-const TMUX_FORMAT = '#{session_name}:#{window_index} #{pane_pid}';
+// The window id (@N) is unique and never reused while the tmux server runs;
+// a session:index target can name another window after a renumber.
+const TMUX_FORMAT = '#{window_id} #{pane_pid}';
+const TMUX_WINDOW_ID = /^@\d+$/;
 const NO_TMUX_NOTE = 'note: tmux not found; running in the background';
 
 function sleep(ms) {
@@ -131,7 +134,7 @@ function startTmux(root, runId, jobId, env) {
     res = tmuxCmd(['new-session', '-d', '-s', session, ...window, ...tail], env);
     if (res.status !== 0) res = tmuxCmd(intoSession, env); // another job created it first
   }
-  const m = res.status === 0 ? /^(\S+:\d+) (\d+)\s*$/.exec(res.stdout || '') : null;
+  const m = res.status === 0 ? /^(@\d+) (\d+)\s*$/.exec(res.stdout || '') : null;
   if (!m) {
     const why = String(res.stderr || (res.error && res.error.message) || '').trim().split('\n')[0];
     throw new Error(`could not open a tmux window for the codex job${why ? `: ${why}` : ''}`);
@@ -322,6 +325,17 @@ async function settledRecord(root, record) {
   return current;
 }
 
+// Closes the job's tmux window, but only a window id whose window is still
+// named neat-<job id>; anything else (a gone window, a reused id on a new
+// server, a renamed window) is left alone. Errors are ignored.
+function closeJobWindow(record, env) {
+  const target = record.tmuxTarget;
+  if (typeof target !== 'string' || !TMUX_WINDOW_ID.test(target)) return;
+  const shown = tmuxCmd(['display-message', '-p', '-t', target, '#{window_name}'], env);
+  if (shown.status !== 0 || String(shown.stdout).trim() !== `neat-${record.id}`) return;
+  tmuxCmd(['kill-window', '-t', target], env);
+}
+
 // Marks the job cancelled first, then stops its process group: SIGTERM, and
 // SIGKILL when any group member is still alive after `graceMs`. Resolves
 // { record, cancelled } (cancelled false when the job had already ended).
@@ -332,9 +346,7 @@ async function cancelJob(root, jobId, { graceMs = CANCEL_GRACE_MS, env = process
   const current = jobs.readJob(root, found.runId, found.id) || found;
   const record = jobs.writeJob(root, { ...current, status: 'cancelled', endedAt: nowIso() });
   await stopGroup(record, graceMs);
-  if (record.mode === 'tmux' && typeof record.tmuxTarget === 'string') {
-    tmuxCmd(['kill-window', '-t', record.tmuxTarget], env); // errors ignored: the window may be gone
-  }
+  if (record.mode === 'tmux') closeJobWindow(record, env);
   return { record, cancelled: true };
 }
 
