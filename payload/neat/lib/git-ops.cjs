@@ -112,9 +112,18 @@ function touchedPaths(known, before, current) {
 // never committed. A changed protected file (git hooks and config, the
 // installed helper, permission settings) is a violation. Records results in
 // state.json.
+// state.guarded with `key` added (once).
+function withGuarded(state, key) {
+  return union([list(state, 'guarded'), [key]]);
+}
+
 function guardRun(root, id, taskIds = [], now) {
   const state = runState.loadRun(root, id);
-  if (!gitLib.isGitRepo(root)) return { ok: true, lines: ['guard skip: not a git repository'] };
+  const key = runState.guardKey(state.stage, taskIds);
+  if (!gitLib.isGitRepo(root)) {
+    runState.saveRun(root, { ...state, guarded: withGuarded(state, key) }, now);
+    return { ok: true, lines: ['guard skip: not a git repository'] };
+  }
   const allowed = new Set(union(tasksById(state, taskIds).map((t) => t.owns)));
   const dirty = list(state, 'dirtyAtStart');
   const changed = list(state, 'changed');
@@ -145,6 +154,7 @@ function guardRun(root, id, taskIds = [], now) {
     hashes: { ...before, ...current, ...gitLib.fingerprints(root, [...fresh, ...generated]) },
     protectedSeen: outside.seen,
     violations: [...list(state, 'violations'), ...messages.map((message) => ({ stage: state.stage, message, at }))],
+    guarded: messages.length === 0 ? withGuarded(state, key) : [...list(state, 'guarded')],
   };
   runState.saveRun(root, next, now);
   const notes = [...allowed].filter((p) => dirty.includes(p))

@@ -195,6 +195,26 @@ test('guard accepts owned changes, notes dirty-at-start files and rejects unowne
   assert.equal(stateOf(run).violations.length, 1);
 });
 
+test('a passing guard records its stage and batch in state.guarded; a failing one does not', () => {
+  const dir = makeRepo();
+  const plan = PLAN.replace('## D1:', '## T2: Other code\nworker: implementer\nowns: b.js\ndo: Add b.js.\n\n## D1:');
+  const run = plannedRun(dir, plan);
+  assert.equal(neat(dir, ['run', 'stage', run.id, 'implement']).status, 0);
+  write(dir, 'a.js', 'impl\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T2,T1']).status, 0);
+  assert.deepEqual(stateOf(run).guarded, ['implement:T1,T2']);
+  write(dir, 'z.js', 'unowned\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 1);
+  assert.deepEqual(stateOf(run).guarded, ['implement:T1,T2']);
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  assert.deepEqual(stateOf(run).guarded, ['implement:T1', 'implement:T1,T2']);
+  const plain = plainDir();
+  const outside = plannedRun(plain);
+  assert.equal(neat(plain, ['run', 'stage', outside.id, 'explore']).status, 0);
+  assert.equal(neat(plain, ['run', 'guard', outside.id]).status, 0);
+  assert.deepEqual(stateOf(outside).guarded, ['explore']);
+});
+
 test('guard without --tasks (read-only stage) fails on any new change', () => {
   const dir = makeRepo();
   const run = plannedRun(dir);

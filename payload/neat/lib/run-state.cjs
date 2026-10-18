@@ -334,6 +334,14 @@ function runOfSession(runs, sessionId, { onlyRun = false } = {}) {
   return runs.find(isUnbound) || null;
 }
 
+// The key `run guard` records in state.guarded once a guard passes: the
+// stage, plus the sorted task ids when the guard checked a batch. Resume uses
+// it to tell a finished batch whose Guard step never ran.
+function guardKey(stage, taskIds = []) {
+  const ids = [...taskIds].map(String).sort();
+  return ids.length > 0 ? `${stage}:${ids.join(',')}` : String(stage);
+}
+
 function assertRunFileName(name) {
   const ok = typeof name === 'string' && name.length <= MAX_FILE_NAME
     && name !== 'state.json' && RUN_FILE_NAME.test(name);
@@ -375,5 +383,6 @@ module.exports = {
   listRuns,
   activeRuns,
   runOfSession,
+  guardKey,
   writeRunFile,
 };

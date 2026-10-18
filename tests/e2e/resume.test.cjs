@@ -271,6 +271,8 @@ describe('run resume and procedure through the installed helper', () => {
     const written = helperRun(['write', id, 'report-explorer.md', '--stdin'], { input: VALID_REPORT });
     assert.equal(written.status, 0, written.stdout + written.stderr);
     assert.equal(helperRun(['run', 'worker', id, 'explorer', 'done']).status, 0);
+    assert.match(helperRun(['run', 'resume', id]).stdout, /^next: Explore - Worker loop step 5 \(Guard\) for explorer, with no G$/m);
+    assert.equal(helperRun(['run', 'guard', id]).status, 0);
 
     const res = helperRun(['run', 'resume', id]);
     assert.equal(res.status, 0, res.stderr);

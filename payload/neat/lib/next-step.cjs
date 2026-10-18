@@ -80,20 +80,39 @@ function advance(state, current) {
   return step(SECTIONS[name], `run stage ${state.id} ${name}, then the ${SECTIONS[name]} section`);
 }
 
-// One worker's stage: null when the worker is done (the caller advances),
-// else its Check step (report present) or a relaunch.
-function singleWorker(state, facts, section, worker) {
-  if (workerStatus(state, worker) === 'done') return null;
+// True when `run guard` passed for `stage` (and the batch `taskIds`).
+function guarded(state, stage, taskIds = []) {
+  const list = Array.isArray(state.guarded) ? state.guarded : [];
+  return list.includes(runState.guardKey(stage, taskIds));
+}
+
+// Step mode asks after every stage (Worker loop step 6). The answer is not
+// kept on disk, so a resumed step-mode run asks again before `then`.
+function askContinue(state, stage, then, onContinue = '') {
+  if (state.mode !== 'step') return then;
+  return step(then.section, `Worker loop step 6 (ask: Stage ${stage} finished. Continue?); on Continue ${onContinue}${then.line}`);
+}
+
+// One worker's stage: null when the worker is done and its Guard step passed
+// (the caller advances), else its Guard step, its Check step (report
+// present) or a relaunch.
+function singleWorker(state, facts, section, worker, stage) {
+  if (workerStatus(state, worker) === 'done') {
+    return guarded(state, stage) ? null : step(section, `Worker loop step 5 (Guard) for ${worker}, with no G`);
+  }
   if (hasReport(facts, worker)) return step(section, `Worker loop step 4 (Check) for ${worker}`);
   return step(section, `Worker loop for ${worker} (write a new brief and launch it again)`);
 }
 
 function exploreStep(state, facts) {
-  const pending = singleWorker(state, facts, 'Explore', 'explorer');
+  // A recorded type means Classify ran, so Guard and the step question did too.
+  if (state.type && workerStatus(state, 'explorer') === 'done') return advance(state, 'explore');
+  const pending = singleWorker(state, facts, 'Explore', 'explorer', 'explore');
   if (pending) return pending;
   if (!state.type) {
     const { id } = state;
-    return step('Classify', `run report show ${id} explorer, rate the task from it, run classify ${id} <level>, then stages ${id} --type <type>`);
+    const classify = step('Classify', `run report show ${id} explorer, rate the task from it, run classify ${id} <level>, then stages ${id} --type <type>`);
+    return askContinue(state, 'explore', classify);
   }
   return advance(state, 'explore');
 }
@@ -118,17 +137,27 @@ function validTasks(state) {
   return tasks.filter((t) => t && TASK_ID.test(t.id) && Array.isArray(t.owns));
 }
 
-// The first batch of `stage` (implement or docs) with an unfinished worker.
+function committedIn(state, stage) {
+  return (Array.isArray(state.commits) ? state.commits : []).some((c) => c && c.stage === stage);
+}
+
+// The first batch of `stage` (implement or docs) with an unfinished worker or
+// whose Guard step has not passed. After the last batch, step mode asks to
+// continue and commits the stage unless that commit is already recorded.
 function batchStep(state, facts, stage) {
   const { worker, prefix } = BATCH_KINDS[stage];
   const batches = computeBatches(validTasks(state).filter((t) => t.worker === worker))[stage];
   for (const batch of batches) {
     const open = batch.map((id) => `${prefix}${id}`).filter((w) => workerStatus(state, w) !== 'done');
-    if (open.length === 0) continue;
+    if (open.length === 0) {
+      if (guarded(state, stage, batch)) continue;
+      return step(SECTIONS[stage], `Worker loop step 5 (Guard) with G = --tasks ${batch.join(',')}`);
+    }
     const loop = open.every((w) => hasReport(facts, w)) ? 'Worker loop step 4 (Check)' : 'Worker loop';
     return step(SECTIONS[stage], `${loop} with W = ${open.join(' ')} and G = --tasks ${batch.join(',')}`);
   }
-  return advance(state, stage);
+  const then = advance(state, stage);
+  return committedIn(state, stage) ? then : askContinue(state, stage, then, `run commit ${state.id}, then `);
 }
 
 function reviewStep(state, facts) {
@@ -148,7 +177,8 @@ function pipelineStep(state, facts) {
   if (stage === 'plan') return planStep(state);
   if (stage === 'implement' || stage === 'docs') return batchStep(state, facts, stage);
   if (stage === 'review') return reviewStep(state, facts);
-  return singleWorker(state, facts, SECTIONS[stage], SINGLE_WORKER[stage]) || advance(state, stage);
+  return singleWorker(state, facts, SECTIONS[stage], SINGLE_WORKER[stage], stage)
+    || askContinue(state, stage, advance(state, stage));
 }
 
 // A running Codex job of the run must be waited for before anything else.
