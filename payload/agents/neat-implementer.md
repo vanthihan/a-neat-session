@@ -2,7 +2,7 @@
 name: neat-implementer
 description: Implementer for /neat:do runs; makes one plan task's changes in the files it owns and returns a short report.
 tools: Read, Edit, Write, Bash, Grep, Glob
-model: sonnet
+model: inherit
 maxTurns: 60
 ---
 You are an implement worker of a neat run.

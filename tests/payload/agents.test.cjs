@@ -16,12 +16,16 @@ const REPORT_HEADINGS = ['## Status', '## Findings', '## Decisions', '## Open qu
 const WRITE_TOOLS = ['Edit', 'Write', 'NotebookEdit'];
 const MAX_DESCRIPTION = 200;
 
+// Every worker declares `model: inherit`: the orchestrator passes the routed
+// model per call, and an omitted model (inherit profile) falls back to the
+// session model instead of a fixed tier.
 const MATRIX = Object.freeze({
-  'neat-explorer': { model: 'haiku', tools: 'Read, Grep, Glob, Bash', maxTurns: '30', readOnly: true },
-  'neat-implementer': { model: 'sonnet', tools: 'Read, Edit, Write, Bash, Grep, Glob', maxTurns: '60', readOnly: false },
-  'neat-reviewer': { model: 'sonnet', tools: 'Read, Grep, Glob, Bash', maxTurns: '30', readOnly: true },
-  'neat-tester': { model: 'sonnet', tools: 'Read, Bash', maxTurns: '30', readOnly: true },
-  'neat-docs': { model: 'haiku', tools: 'Read, Edit, Write, Grep, Glob', maxTurns: '30', readOnly: false },
+  'neat-explorer': { model: 'inherit', tools: 'Read, Grep, Glob, Bash', maxTurns: '30', readOnly: true },
+  'neat-researcher': { model: 'inherit', tools: 'WebSearch, WebFetch, Read, Grep, Glob, Write', maxTurns: '30', readOnly: false },
+  'neat-implementer': { model: 'inherit', tools: 'Read, Edit, Write, Bash, Grep, Glob', maxTurns: '60', readOnly: false },
+  'neat-reviewer': { model: 'inherit', tools: 'Read, Grep, Glob, Bash', maxTurns: '30', readOnly: true },
+  'neat-tester': { model: 'inherit', tools: 'Read, Bash', maxTurns: '30', readOnly: true },
+  'neat-docs': { model: 'inherit', tools: 'Read, Edit, Write, Grep, Glob', maxTurns: '30', readOnly: false },
 });
 
 // Tiny flat frontmatter parser: lines between the first two `---` lines, `key: value`.
@@ -49,7 +53,7 @@ function toolList(fields) {
   return fields.tools.split(',').map((t) => t.trim());
 }
 
-test('payload/agents holds exactly the five workers', () => {
+test('payload/agents holds exactly the six workers', () => {
   const files = fs.readdirSync(AGENTS_DIR).sort();
   assert.deepEqual(files, Object.keys(MATRIX).map((n) => `${n}.md`).sort());
 });
@@ -125,3 +129,44 @@ for (const [name, spec] of Object.entries(MATRIX)) {
     });
   });
 }
+
+function contractOf(body) {
+  const m = body.match(/## Contract\n([\s\S]*?)\n## /);
+  assert.ok(m, 'missing ## Contract section');
+  return m[1];
+}
+
+test('every worker shares the same Contract section', () => {
+  const contracts = Object.keys(MATRIX).map((n) => contractOf(parseAgent(load(n)).body));
+  for (const c of contracts) assert.equal(c, contracts[0]);
+});
+
+describe('neat-researcher', () => {
+  const { fields, body } = parseAgent(load('neat-researcher'));
+  const role = body.slice(body.indexOf('## Role'));
+
+  test('has no shell and no edit tools', () => {
+    const tools = toolList(fields);
+    for (const t of ['Bash', 'Edit', 'NotebookEdit']) assert.ok(!tools.includes(t), t);
+  });
+
+  test('role covers notes, untrusted web content, the search cap and missing web tools', () => {
+    assert.match(role, /no shell/);
+    assert.match(role, /Grep and Glob tools/);
+    assert.match(role, /Write tool/);
+    assert.match(role, /run dir/);
+    assert.match(role, /untrusted/);
+    assert.match(role, /at most 8 web searches/);
+    assert.match(role, /`Notes:`/);
+    assert.match(role, /source URL/);
+    assert.match(role, /`source - finding`/);
+    assert.match(role, /`partial`/);
+    assert.match(role, /`blocked`/);
+  });
+});
+
+test('explorer lists questions the repository cannot answer as research: open questions', () => {
+  const { body } = parseAgent(load('neat-explorer'));
+  assert.match(body, /`## Open questions`/);
+  assert.match(body, /`research: \.\.\.`/);
+});

@@ -2,7 +2,7 @@
 name: neat-docs
 description: Docs writer for /neat:do runs; updates the doc files it owns to match the run's changes and returns a short report.
 tools: Read, Edit, Write, Grep, Glob
-model: haiku
+model: inherit
 maxTurns: 30
 ---
 You are a docs worker of a neat run.

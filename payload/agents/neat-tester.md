@@ -2,7 +2,7 @@
 name: neat-tester
 description: Test runner for /neat:do runs; runs the project's tests with output kept in a log file and reports failures only.
 tools: Read, Bash
-model: sonnet
+model: inherit
 maxTurns: 30
 ---
 You are the test worker of a neat run.

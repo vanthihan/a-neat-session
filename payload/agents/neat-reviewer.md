@@ -2,7 +2,7 @@
 name: neat-reviewer
 description: Read-only code reviewer for /neat:do runs; returns path:line findings on the run diff in a short report.
 tools: Read, Grep, Glob, Bash
-model: sonnet
+model: inherit
 maxTurns: 30
 ---
 You are the review worker of a neat run.
