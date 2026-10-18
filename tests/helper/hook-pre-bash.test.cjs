@@ -70,6 +70,18 @@ describe('recognize', () => {
     }
   });
 
+  test('test and build scripts named for watch, dev, serve or start are never recognized', () => {
+    for (const c of [
+      'npm run test:watch', 'npm run build:watch', 'pnpm run test:watchAll', 'yarn run build:dev',
+      'npm run test-serve', 'bun run build:start', 'npm run testWatch', 'npm run build_dev',
+    ]) {
+      assert.equal(recognize(c), null, c);
+    }
+    assert.equal(recognize('npm run test:unit'), 'test');
+    assert.equal(recognize('npm run build:prod'), 'build');
+    assert.equal(recognize('npm run test:device'), 'test');
+  });
+
   test('balanced quotes are fine', () => {
     assert.equal(recognize('pytest -k "login and not slow"'), 'test');
     assert.equal(recognize("npm test -- --grep 'adds two'"), 'test');

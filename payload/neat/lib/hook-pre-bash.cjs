@@ -26,6 +26,9 @@ const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f]/;
 const LEADING_CD = /^cd ([A-Za-z0-9._/+@-]+) && (.+)$/s;
 const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=[^\s$'"]*$/;
 const WATCH_WORDS = new Set(['--watch', '--watchAll', '-w', 'watch', 'dev', 'serve', '--serve', 'start']);
+// Package script names that suggest a long-running process (watch mode, a dev
+// server): piped into the filter they would show nothing until killed.
+const LONG_RUNNING_SCRIPT = /watch|(^|[:_-])(dev|serve|start)($|[:_-])/i;
 const MAKE_REFUSED = new Set(['clean', 'distclean', 'install', 'uninstall', 'run']);
 const RUNNER_PREFIXES = Object.freeze([['npx'], ['bunx'], ['pnpm', 'exec'], ['yarn', 'exec']]);
 const INSTALL_SUBS = Object.freeze({
@@ -53,6 +56,7 @@ function packageKind([pm, sub, script]) {
   if (!Object.prototype.hasOwnProperty.call(INSTALL_SUBS, pm)) return null;
   if (sub === 'test' || (pm === 'npm' && sub === 't')) return 'test';
   if (sub === 'run' && typeof script === 'string') {
+    if (LONG_RUNNING_SCRIPT.test(script)) return null;
     if (/^test(:|$)/.test(script)) return 'test';
     if (/^build(:|$)/.test(script)) return 'build';
     return null;

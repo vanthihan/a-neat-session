@@ -459,8 +459,9 @@ Recognized commands:
   `uv pip install`, `composer install`
 
 It leaves alone anything with pipes, redirects, `;`, `&&` (except one leading
-`cd <dir> &&`), subshells or substitutions, watch modes and dev servers,
-`make clean|install|run` and background commands.
+`cd <dir> &&`), subshells or substitutions, watch modes and dev servers
+(including `test*` and `build*` scripts whose name contains `watch`, `dev`,
+`serve` or `start`), `make clean|install|run` and background commands.
 
 The rewrite does not approve anything: Claude Code checks the rewritten
 command against your permission rules, `set -o pipefail` is covered by the
