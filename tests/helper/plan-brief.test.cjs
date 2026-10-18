@@ -257,6 +257,44 @@ test('orchestrator notes are appended as a final section', () => {
   assert.ok(!brief('tester').includes('## Orchestrator notes'));
 });
 
+test('researcher brief names the notes file, owns nothing and saves with the Write tool', () => {
+  const text = brief('researcher');
+  assert.ok(text.includes(`Notes: ${RUN_DIR}/research-notes.md`));
+  assert.ok(text.includes(`Report: ${RUN_DIR}/report-researcher.md`));
+  assert.match(text, /## Files you own\n- none \(read-only role\)\n/);
+  assert.match(text, /Orchestrator notes/);
+  assert.match(text, /source URL or `path:line`/);
+  assert.match(text, /Write tool/);
+  assert.match(text, /Grep and Glob tools/);
+  assert.match(text, /untrusted/);
+  assert.match(text, /at most 8 web searches/);
+  assert.match(text, /`source - finding`/);
+  assert.match(text, /partial/);
+  assert.ok(!text.includes('NEAT_EOF'));
+  assert.ok(!text.includes('Findings as `path:line - note`'));
+  for (const h of REPORT_HEADINGS) assert.ok(text.includes(h), h);
+});
+
+test('other roles keep `path:line - note` findings and no notes header', () => {
+  for (const w of ['explorer', 'reviewer', 'tester', 'implementer-T1', 'docs-D1']) {
+    const text = brief(w);
+    assert.ok(text.includes('Findings as `path:line - note`'), w);
+    assert.ok(!text.includes('Notes: '), w);
+    assert.ok(!text.includes('untrusted'), w);
+  }
+});
+
+test('context files list the researcher report and notes when present', () => {
+  const names = ['/plan.md', '/report-explorer.md', '/report-researcher.md', '/research-notes.md'];
+  const exists = (p) => names.some((n) => p.endsWith(n));
+  for (const w of ['implementer-T1', 'reviewer', 'docs-D1']) {
+    const text = brief(w, { exists });
+    assert.ok(text.includes(`- ${RUN_DIR}/report-researcher.md`), w);
+    assert.ok(text.includes(`- ${RUN_DIR}/research-notes.md`), w);
+  }
+  assert.ok(!brief('implementer-T1').includes('research-notes.md'));
+});
+
 // ---------- CLI ----------
 
 let proj;
@@ -439,4 +477,42 @@ test('brief --stdin appends orchestrator notes', () => {
   assert.equal(res.status, 0, res.stderr);
   const text = fs.readFileSync(res.stdout.split('\n')[0], 'utf8');
   assert.match(text, /## Orchestrator notes\ntest command: npm test\n$/);
+});
+
+test('brief researcher routes on the mid tier and carries orchestrator questions', () => {
+  const { id, dir } = newRun('--research how does the retry work');
+  const res = neat(['brief', id, 'researcher', '--stdin'], 'research: retry backoff in fetch?\nresearch: max attempts?\n');
+  assert.equal(res.status, 0, res.stderr);
+  const lines = res.stdout.split('\n');
+  assert.equal(lines[0], path.join(dir, 'brief-researcher.md'));
+  assert.ok(lines[1].startsWith('route worker=researcher model=sonnet effort=medium profile=adaptive '), lines[1]);
+  const text = fs.readFileSync(lines[0], 'utf8');
+  assert.ok(text.includes(`Notes: ${dir}/research-notes.md`));
+  assert.match(text, /## Orchestrator notes\nresearch: retry backoff in fetch\?\nresearch: max attempts\?\n$/);
+  assert.equal(readState(dir).workers.find((x) => x.name === 'researcher').status, 'running');
+});
+
+test('run worker accepts researcher; invalid names list it', () => {
+  const { id, dir } = newRun('worker names');
+  const ok = neat(['run', 'worker', id, 'researcher', 'done']);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.stdout, 'worker researcher done\n');
+  assert.equal(readState(dir).workers.find((x) => x.name === 'researcher').status, 'done');
+  const bad = neat(['run', 'worker', id, 'wizard', 'done']);
+  assert.equal(bad.status, 2);
+  assert.match(bad.stderr, /explorer\|researcher\|reviewer/);
+  const badBrief = neat(['brief', id, 'wizard']);
+  assert.match(badBrief.stderr, /explorer\|researcher\|reviewer/);
+});
+
+test('an implementer brief lists researcher notes and report once they exist', () => {
+  const { id, dir } = newRun('implement after research');
+  fs.writeFileSync(path.join(dir, 'plan.md'), VALID_PLAN);
+  assert.equal(neat(['plan', 'check', id]).status, 0);
+  fs.writeFileSync(path.join(dir, 'research-notes.md'), 'https://example.com - retries\n');
+  fs.writeFileSync(path.join(dir, 'report-researcher.md'), 'x\n');
+  const res = neat(['brief', id, 'implementer-T1']);
+  assert.equal(res.status, 0, res.stderr);
+  const text = fs.readFileSync(res.stdout.split('\n')[0], 'utf8');
+  assert.match(text, /## Context files\n(- .*\n)*- .*report-researcher\.md\n- .*research-notes\.md\n/);
 });

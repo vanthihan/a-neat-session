@@ -8,7 +8,7 @@ const gitLib = require('./git.cjs');
 
 const PIPELINE = Object.freeze(['explore', 'research', 'plan', 'implement', 'review', 'test', 'docs']);
 const STAGES = Object.freeze([...PIPELINE, 'done', 'cancelled']);
-const WORKER_NAME = /^(explorer|reviewer|tester|implementer-T\d+|docs-D\d+)$/;
+const WORKER_NAME = /^(explorer|researcher|reviewer|tester|implementer-T\d+|docs-D\d+)$/;
 const WORKER_STATUSES = Object.freeze(['running', 'done', 'failed', 'report-invalid']);
 const COMPLEXITIES = Object.freeze(['trivial', 'normal', 'risky']);
 const RUN_ID = /^\d{8}-\d{6}-[a-z0-9-]{1,48}$/;
@@ -112,7 +112,7 @@ function gitBaseline(root) {
   return { baseSha: sha, headSha: sha, dirtyAtStart: dirty, hashes: gitLib.fingerprints(root, dirty) };
 }
 
-function createRun(root, { task, mode, profile }, now = currentTime()) {
+function createRun(root, { task, mode, profile, research }, now = currentTime()) {
   const baseline = gitBaseline(root);
   fs.mkdirSync(runsDir(root), { recursive: true });
   const id = makeRunId(task, now, listRunIds(root));
@@ -123,6 +123,7 @@ function createRun(root, { task, mode, profile }, now = currentTime()) {
     task,
     mode,
     profile: profile || null,
+    research: Boolean(research),
     stage: 'created',
     // research runs only when selected (`neat stages`), so it starts skipped.
     stages: PIPELINE.map((name) => ({ name, status: name === 'research' ? 'skipped' : 'pending' })),
@@ -182,7 +183,7 @@ function setComplexity(state, level) {
 // entry are kept; `extra` (for example { model, effort }) is merged last.
 function setWorker(state, name, status, report, extra = {}) {
   if (typeof name !== 'string' || !WORKER_NAME.test(name)) {
-    throw new UsageError(`invalid worker name '${name}' (use explorer|reviewer|tester|implementer-T<n>|docs-D<n>)`);
+    throw new UsageError(`invalid worker name '${name}' (use explorer|researcher|reviewer|tester|implementer-T<n>|docs-D<n>)`);
   }
   assertOneOf('worker status', status, WORKER_STATUSES);
   const workers = Array.isArray(state.workers) ? state.workers : [];

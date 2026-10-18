@@ -1,7 +1,8 @@
 'use strict';
 
-// Parses the raw /neat:do argument text into { task, mode, profile }.
-// Flags are recognised only as leading tokens or trailing `--mode`/`--profile` pairs;
+// Parses the raw /neat:do argument text into { task, mode, profile, research }.
+// Flags are recognised only as leading tokens or trailing `--mode`/`--profile` pairs
+// (`--research` takes no value and counts only as a leading token);
 // everything else is task text, kept byte-exact (inner whitespace included).
 
 const MODES = Object.freeze(['gate', 'auto', 'step']);
@@ -28,7 +29,7 @@ function tokenize(text) {
 }
 
 function unknownFlag(token) {
-  return new UsageError(`unknown flag ${token.split('=')[0]} (valid: --mode, --profile; put -- before a task that starts with a flag)`);
+  return new UsageError(`unknown flag ${token.split('=')[0]} (valid: --mode, --profile, --research; put -- before a task that starts with a flag)`);
 }
 
 // Returns a recorder for one value flag (`--mode`, `--profile`): rejects a
@@ -52,16 +53,36 @@ function flagRecorder(flag, allowed, strictTrailing = false) {
   };
 }
 
+// Recorder for a leading boolean flag (`--research`): no value, no `=` form,
+// a second occurrence is rejected.
+function switchRecorder(flag) {
+  let on = false;
+  return {
+    flag,
+    set() {
+      if (on) throw new UsageError(`duplicate ${flag}`);
+      on = true;
+    },
+    get: () => on,
+  };
+}
+
 function recorderFor(flags, token) {
   return flags.find((f) => token === f.flag || token.startsWith(`${f.flag}=`)) || null;
 }
 
 // Consumes leading flags; returns { index, stop } where stop means `--` was seen.
-function consumeLeading(tokens, flags) {
+function consumeLeading(tokens, flags, switches) {
   let i = 0;
   while (i < tokens.length && tokens[i].value.startsWith('--')) {
     const v = tokens[i].value;
     if (v === '--') return { index: i + 1, stop: true };
+    const sw = switches.find((f) => v === f.flag);
+    if (sw) {
+      sw.set();
+      i += 1;
+      continue;
+    }
     const rec = recorderFor(flags, v);
     if (!rec) throw unknownFlag(v);
     if (v === rec.flag) {
@@ -120,15 +141,16 @@ function parseTaskArgs(text) {
   const tokens = tokenize(raw);
   const mode = flagRecorder('--mode', MODES, true);
   const profile = flagRecorder('--profile', PROFILES);
+  const research = switchRecorder('--research');
   const flags = [mode, profile];
-  const lead = consumeLeading(tokens, flags);
+  const lead = consumeLeading(tokens, flags, [research]);
   const end = lead.stop ? tokens.length : consumeTrailing(tokens, lead.index, flags);
   const task = lead.index < end
     ? stripWrappingQuotes(raw.slice(tokens[lead.index].start, tokens[end - 1].end).trim())
     : '';
   if (task === '') throw new UsageError('task is required');
   // profile stays null when absent: the config files fill it in later.
-  return { task, mode: mode.get() || DEFAULT_MODE, profile: profile.get() };
+  return { task, mode: mode.get() || DEFAULT_MODE, profile: profile.get(), research: research.get() };
 }
 
 module.exports = { parseTaskArgs, UsageError, MODES, DEFAULT_MODE, PROFILES, DEFAULT_PROFILE };

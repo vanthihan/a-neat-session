@@ -21,7 +21,7 @@ const stages = require(path.join(LIB, 'stages.cjs'));
 const MAX_ERROR_LINES = 5;
 
 const HELP = [
-  'neat run new [--stdin] [--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [task]',
+  'neat run new [--stdin] [--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [--research] [task]',
   'neat run stage <run-id> <explore|research|plan|implement|review|test|docs|done|cancelled>',
   'neat run worker <run-id> <name> <running|done|failed|report-invalid>',
   'neat run classify <run-id> <trivial|normal|risky>',
@@ -62,10 +62,10 @@ function cmdRunNew(args) {
   const words = useStdin ? args.slice(1) : args;
   if (useStdin && words.length > 0) throw new UsageError('run new --stdin takes no task words');
   const text = useStdin ? readStdin() : words.join(' ');
-  const { task, mode, profile } = parseTaskArgs(text);
+  const { task, mode, profile, research } = parseTaskArgs(text);
   const root = runState.projectRoot(process.env, process.cwd());
   config.effectiveConfig({ root, env: process.env, state: { profile } }); // invalid config: exit 2, no run
-  const state = runState.createRun(root, { task, mode, profile }, runState.currentTime(process.env));
+  const state = runState.createRun(root, { task, mode, profile, research }, runState.currentTime(process.env));
   out(`id=${state.id} mode=${state.mode} dir=${runState.runDir(root, state.id)}`);
   gitOps.startLines(root, state).forEach((line) => out(line));
   return 0;
