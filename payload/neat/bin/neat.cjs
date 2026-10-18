@@ -18,6 +18,7 @@ const config = require(path.join(LIB, 'config.cjs'));
 const usage = require(path.join(LIB, 'usage.cjs'));
 const stages = require(path.join(LIB, 'stages.cjs'));
 const codexCli = require(path.join(LIB, 'cli-codex.cjs'));
+const codex = require(path.join(LIB, 'codex.cjs'));
 
 const MAX_ERROR_LINES = 5;
 
@@ -36,7 +37,7 @@ const HELP = [
   'neat write <run-id> <file-name> --stdin',
   'neat report check <file>',
   'neat config show [<run-id>]',
-  'neat config get <profile|thresholds.soft|thresholds.hard|usage.capturePath>',
+  'neat config get <profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault>',
   'neat status [--json]',
   'neat usage-capture [--path <file>] [--quiet]',
   ...codexCli.HELP_LINES,
@@ -66,7 +67,10 @@ function cmdRunNew(args) {
   const text = useStdin ? readStdin() : words.join(' ');
   const { task, mode, profile, research } = parseTaskArgs(text);
   const root = runState.projectRoot(process.env, process.cwd());
-  config.effectiveConfig({ root, env: process.env, state: { profile } }); // invalid config: exit 2, no run
+  const cfg = config.effectiveConfig({ root, env: process.env, state: { profile } }); // invalid config: exit 2, no run
+  if (cfg.codex.enabled === 'on' && !codex.detect(process.env).found) {
+    throw new UsageError('codex.enabled is on but codex was not found');
+  }
   const state = runState.createRun(root, { task, mode, profile, research }, runState.currentTime(process.env));
   out(`id=${state.id} mode=${state.mode} dir=${runState.runDir(root, state.id)}`);
   gitOps.startLines(root, state).forEach((line) => out(line));

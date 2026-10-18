@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { UsageError } = require('./cli-args.cjs');
+const { effectiveConfig } = require('./config.cjs');
 const runState = require('./run-state.cjs');
 const { roleOf } = require('./route.cjs');
 const codex = require('./codex.cjs');
@@ -33,24 +34,30 @@ function nowIso(env = process.env) {
   return runState.currentTime(env).toISOString();
 }
 
+function assertAvailable(cfg, env) {
+  const avail = codex.availability(cfg, env);
+  if (avail.enabled === 'off') throw new UsageError('codex.enabled is off');
+  if (!avail.available) throw new UsageError('codex was not found');
+  return avail.detected.path;
+}
+
 // Checks everything a job needs; returns the job settings. Throws a
 // UsageError before anything is written.
-function jobPlan(root, state, worker, env) {
+function jobPlan(root, state, worker, { env, sandbox }) {
   if (typeof worker !== 'string' || !runState.WORKER_NAME.test(worker)) {
     throw new UsageError(`invalid worker name '${worker}'`);
   }
   const role = roleOf(worker);
   if (!codex.ELIGIBLE_ROLES.includes(role)) throw new UsageError(`${role} runs on Claude only`);
-  const dir = runState.runDir(root, state.id);
-  const briefPath = path.join(dir, `brief-${worker}.md`);
+  const cfg = effectiveConfig({ root, env, state });
+  const chosen = codex.sandboxFor(role, sandbox, cfg);
+  const codexPath = assertAvailable(cfg, env);
+  const briefPath = path.join(runState.runDir(root, state.id), `brief-${worker}.md`);
   if (!fs.existsSync(briefPath)) {
     throw new UsageError(`no brief for ${worker}: run neat brief ${state.id} ${worker} first`);
   }
-  const found = codex.detect(env);
-  if (!found.found) throw new UsageError('codex was not found');
   const entry = (state.workers || []).find((w) => w.name === worker) || {};
-  const sandbox = role === 'reviewer' ? 'read-only' : 'workspace-write';
-  return { role, briefPath, codexPath: found.path, sandbox, effort: entry.effort || 'none', model: null };
+  return { role, briefPath, codexPath, sandbox: chosen, effort: entry.effort || 'none', model: cfg.codex.model };
 }
 
 function execArgs(record, root) {
@@ -77,10 +84,11 @@ function spawnWrapper(root, runId, jobId, env) {
   return child.pid;
 }
 
-// Starts `worker` of run `runId` on Codex in the background; returns the record.
-function startJob(root, { runId, worker, env = process.env, now = runState.currentTime(env) }) {
+// Starts `worker` of run `runId` on Codex in the background; returns the
+// record. `sandbox` is the --sandbox flag value or null.
+function startJob(root, { runId, worker, sandbox = null, env = process.env, now = runState.currentTime(env) }) {
   const state = runState.loadRun(root, runId);
-  const plan = jobPlan(root, state, worker, env);
+  const plan = jobPlan(root, state, worker, { env, sandbox });
   const dir = runState.runDir(root, runId);
   const id = jobs.makeJobId(root, runId, worker);
   const base = {

@@ -5,6 +5,7 @@
 
 const { UsageError } = require('./cli-args.cjs');
 const runState = require('./run-state.cjs');
+const { effectiveConfig } = require('./config.cjs');
 const codex = require('./codex.cjs');
 const jobs = require('./jobs.cjs');
 const runner = require('./job-runner.cjs');
@@ -12,7 +13,7 @@ const codexResult = require('./codex-result.cjs');
 
 const HELP_LINES = Object.freeze([
   'neat codex detect',
-  'neat codex run <run-id> <worker>',
+  'neat codex run <run-id> <worker> [--sandbox read-only|workspace-write]',
   'neat codex wait <job-id>... [--timeout <seconds>]',
   'neat codex result [<job-id>]',
 ]);
@@ -32,18 +33,45 @@ function jobLine(r) {
   return `job ${r.id} status=${r.status} exit=${exitText(r.exitCode)} worker=${r.worker}`;
 }
 
+// Exit 1 only when codex.enabled is on and Codex is missing.
 function cmdDetect(args, io) {
   if (args.length !== 0) throw new UsageError('usage: neat codex detect');
-  const found = codex.detect(io.env);
-  io.out(found.found ? `codex=yes version=${found.version}` : 'codex=no');
-  return 0;
+  const avail = codex.availability(effectiveConfig({ root: rootOf(io), env: io.env }), io.env);
+  if (avail.enabled === 'off') {
+    io.out('codex=no');
+    io.out('note: codex.enabled is off');
+    return 0;
+  }
+  io.out(avail.available ? `codex=yes version=${avail.detected.version}` : 'codex=no');
+  return avail.required && !avail.available ? 1 : 0;
+}
+
+const RUN_USAGE = 'usage: neat codex run <run-id> <worker> [--sandbox read-only|workspace-write]';
+
+// <run-id> <worker> plus `--sandbox <v>` (or `--sandbox=<v>`).
+function runArgs(args) {
+  const words = [];
+  let sandbox = null;
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '--sandbox' || a.startsWith('--sandbox=')) {
+      if (sandbox !== null) throw new UsageError('--sandbox given twice');
+      sandbox = a === '--sandbox' ? args[(i += 1)] : a.slice('--sandbox='.length);
+      if (!sandbox) throw new UsageError('--sandbox needs a value');
+    } else if (a.startsWith('-')) {
+      throw new UsageError(`unknown flag ${a}`);
+    } else {
+      words.push(a);
+    }
+  }
+  if (words.length !== 2) throw new UsageError(RUN_USAGE);
+  return { runId: words[0], worker: words[1], sandbox };
 }
 
 function cmdRun(args, io) {
-  const [runId, worker] = args;
-  if (args.length !== 2) throw new UsageError('usage: neat codex run <run-id> <worker>');
+  const { runId, worker, sandbox } = runArgs(args);
   const root = rootOf(io);
-  const r = runner.startJob(root, { runId, worker, env: io.env, now: runState.currentTime(io.env) });
+  const r = runner.startJob(root, { runId, worker, sandbox, env: io.env, now: runState.currentTime(io.env) });
   io.out(`job=${r.id} worker=${r.worker} mode=${r.mode} sandbox=${r.sandbox} pid=${r.pid}`);
   return 0;
 }

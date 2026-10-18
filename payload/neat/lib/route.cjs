@@ -95,8 +95,8 @@ function formatRoute(r) {
 // comes from the capture at the effective usage.capturePath, judged at `now`:
 // at or above thresholds.soft the worker drops one tier; thresholds.hard
 // decides the engine: at or above it a Codex-eligible worker goes to Codex
-// when Codex is found. Codex is never probed below hard. Context usage is
-// reported and never changes the route.
+// when Codex is available, and every other worker pauses. Codex is never
+// probed below hard. Context usage is reported and never changes the route.
 function routeWorker(root, state, worker, env = process.env, now = new Date(), home = os.homedir()) {
   const cfg = effectiveConfig({ root, env, home, state });
   const profile = cfg.profile;
@@ -105,11 +105,11 @@ function routeWorker(root, state, worker, env = process.env, now = new Date(), h
   const { usage, ctx } = readUsage(cfg.usage.capturePath, now);
   const r = routeFor({ role, profile, complexity, usage, soft: cfg.thresholds.soft });
   const hard = usage !== null && usage >= cfg.thresholds.hard;
-  const onCodex = hard && codex.ELIGIBLE_ROLES.includes(role) && codex.detect(env).found;
+  const onCodex = hard && codex.eligible(role, cfg) && codex.availability(cfg, env).available;
   return {
     worker, model: r.model, effort: r.effort, profile, complexity, usage, stepdown: r.stepdown, hard, ctx,
     target: onCodex ? 'codex' : 'claude',
-    action: 'run',
+    action: hard && !onCodex ? 'pause' : 'run',
   };
 }
 

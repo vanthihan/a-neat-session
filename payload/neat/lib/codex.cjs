@@ -8,11 +8,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { REPORT_HEADINGS, MAX_REPORT_WORDS, REPORT_STATUSES } = require('./report-check.cjs');
+const { UsageError } = require('./cli-args.cjs');
 
 const VERSION_TIMEOUT_MS = 5000;
 const VERSION = /(\d+\.\d+\.\d+[\w.-]*)/;
 const NO_CODEX = 'none';
-const MODEL = /^[A-Za-z0-9._:-]{1,64}$/;
+const MODEL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 
 // Routed effort -> model_reasoning_effort. `none` (inherit) omits the setting.
 const EFFORT = Object.freeze({ low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'xhigh' });
@@ -70,6 +71,36 @@ function detect(env = process.env) {
   return result;
 }
 
+// { available, required, detected } from config and detection. `off` never
+// probes for the binary; `on` marks Codex as required.
+function availability(cfg, env = process.env) {
+  const enabled = cfg.codex.enabled;
+  if (enabled === 'off') return { available: false, required: false, enabled, detected: null };
+  const detected = detect(env);
+  return { available: detected.found, required: enabled === 'on', enabled, detected };
+}
+
+// A role may go to Codex: one of ELIGIBLE_ROLES, and a write role only while
+// codex.sandboxDefault allows writes.
+function eligible(role, cfg) {
+  if (!ELIGIBLE_ROLES.includes(role)) return false;
+  return role === 'reviewer' || cfg.codex.sandboxDefault === 'workspace-write';
+}
+
+// Sandbox for `role`: the reviewer is always read-only; write roles use the
+// --sandbox flag, else codex.sandboxDefault.
+function sandboxFor(role, flag, cfg) {
+  if (flag !== null && flag !== undefined && !SANDBOXES.includes(flag)) {
+    throw new UsageError(`invalid --sandbox '${flag}' (use ${SANDBOXES.join('|')})`);
+  }
+  if (role === 'reviewer') {
+    if (flag === 'workspace-write') throw new UsageError('the reviewer runs read-only (--sandbox workspace-write is refused)');
+    return 'read-only';
+  }
+  if (flag) return flag;
+  return cfg.codex.sandboxDefault === 'read-only' ? 'read-only' : 'workspace-write';
+}
+
 // Pure: the argv after the codex binary. Throws on any value outside the tables.
 function buildExecArgs({ sandbox, root, effort = 'none', model = null, outputPath }) {
   if (!SANDBOXES.includes(sandbox)) throw new Error(`invalid sandbox '${sandbox}'`);
@@ -109,6 +140,9 @@ module.exports = {
   ELIGIBLE_ROLES,
   MODEL,
   detect,
+  availability,
+  eligible,
+  sandboxFor,
   buildExecArgs,
   codexRules,
 };

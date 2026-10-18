@@ -109,11 +109,11 @@ test('codex detect reports the shim version, or codex=no with none', () => {
   assert.equal(none.stdout, 'codex=no\n');
 });
 
-test('route lines: hard + codex -> target=codex, without codex or below hard -> claude', () => {
+test('route lines: hard + codex -> target=codex, hard without codex -> pause, below hard -> claude', () => {
   const { id } = newRun('route targets');
   assert.match(briefLine(id, 'reviewer'), / usage=95% stepdown=yes hard=yes ctx=unknown target=codex action=run$/);
   const noCodex = briefLine(id, 'reviewer', { NEAT_CODEX_BIN: 'none' });
-  assert.match(noCodex, / hard=yes ctx=unknown target=claude action=run$/);
+  assert.match(noCodex, / hard=yes ctx=unknown target=claude action=pause$/);
   const quiet = makeTempDir('neat-cdx-cfg-');
   try {
     fs.rmSync(log, { force: true });

@@ -5,7 +5,8 @@
 //            <- project <root>/.neat/config.json
 //            <- run (--profile stored in state.json)
 // Both files are optional. A present but invalid file is a UsageError (exit 2)
-// naming the file. The project file cannot set helper paths (usage.capturePath).
+// naming the file. The project file cannot set helper paths (usage.capturePath)
+// and may only switch Codex off; the Codex model and sandbox are global-only.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -16,16 +17,25 @@ const DEFAULTS = Object.freeze({
   profile: DEFAULT_PROFILE,
   thresholds: Object.freeze({ soft: 70, hard: 90 }),
   usage: Object.freeze({ capturePath: null }),
+  codex: Object.freeze({ enabled: 'auto', model: null, sandboxDefault: 'workspace-write' }),
 });
+
+const CODEX_ENABLED = Object.freeze(['auto', 'on', 'off']);
+const CODEX_SANDBOXES = Object.freeze(['read-only', 'workspace-write']);
+const CODEX_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
 
 // Allowed keys per section; a key not listed here is a config error.
 const SCHEMA = Object.freeze({
   profile: null,
   thresholds: Object.freeze(['soft', 'hard']),
   usage: Object.freeze(['capturePath']),
+  codex: Object.freeze(['enabled', 'model', 'sandboxDefault']),
 });
 
-const KEYS = Object.freeze(['profile', 'thresholds.soft', 'thresholds.hard', 'usage.capturePath']);
+const KEYS = Object.freeze([
+  'profile', 'thresholds.soft', 'thresholds.hard', 'usage.capturePath',
+  'codex.enabled', 'codex.model', 'codex.sandboxDefault',
+]);
 
 // Local copy of the installer's expandTilde: the payload is installed on its
 // own and cannot require the installer package.
@@ -69,6 +79,31 @@ function checkSection(name, value, fail) {
   }
 }
 
+function validateCodex(value, scope, fail) {
+  checkSection('codex', value, fail);
+  const out = {};
+  if ('enabled' in value) {
+    if (!CODEX_ENABLED.includes(value.enabled)) fail(`codex.enabled must be one of ${CODEX_ENABLED.join('|')}`);
+    if (scope === 'project' && value.enabled !== 'off') fail('codex.enabled may only be off in the project config');
+    out.enabled = value.enabled;
+  }
+  if ('model' in value) {
+    if (scope === 'project') fail('codex.model is only allowed in the global config');
+    if (typeof value.model !== 'string' || !CODEX_MODEL.test(value.model)) {
+      fail('codex.model must match [A-Za-z0-9._:-] (1-64 characters, starting with a letter or digit)');
+    }
+    out.model = value.model;
+  }
+  if ('sandboxDefault' in value) {
+    if (scope === 'project') fail('codex.sandboxDefault is only allowed in the global config');
+    if (!CODEX_SANDBOXES.includes(value.sandboxDefault)) {
+      fail(`codex.sandboxDefault must be one of ${CODEX_SANDBOXES.join('|')}`);
+    }
+    out.sandboxDefault = value.sandboxDefault;
+  }
+  return out;
+}
+
 // Validates one parsed file; returns a normalised copy (capturePath expanded).
 function validate(data, { scope, home, fail }) {
   if (!isObject(data)) fail('must be a JSON object');
@@ -99,6 +134,7 @@ function validate(data, { scope, home, fail }) {
       out.usage = { capturePath: path.resolve(expanded) };
     }
   }
+  if ('codex' in data) out.codex = validateCodex(data.codex, scope, fail);
   return out;
 }
 
@@ -139,6 +175,12 @@ function layer(cfg, sources, data, source) {
     cfg.usage.capturePath = data.usage.capturePath;
     sources['usage.capturePath'] = source;
   }
+  for (const key of SCHEMA.codex) {
+    if (data.codex && data.codex[key] !== undefined) {
+      cfg.codex[key] = data.codex[key];
+      sources[`codex.${key}`] = source;
+    }
+  }
 }
 
 // Effective config with a source per value and both file paths.
@@ -149,6 +191,7 @@ function effectiveConfig({ root, env = process.env, home = os.homedir(), state =
     profile: DEFAULTS.profile,
     thresholds: { ...DEFAULTS.thresholds },
     usage: { capturePath: defaultCapturePath(env, home) },
+    codex: { ...DEFAULTS.codex },
   };
   const sources = Object.fromEntries(KEYS.map((k) => [k, 'default']));
   layer(cfg, sources, readConfigFile(globalFile, { scope: 'global', home }), 'global');
@@ -173,6 +216,9 @@ function configValue(cfg, key) {
   if (key === 'thresholds.soft') return String(cfg.thresholds.soft);
   if (key === 'thresholds.hard') return String(cfg.thresholds.hard);
   if (key === 'usage.capturePath') return cfg.usage.capturePath;
+  if (key === 'codex.enabled') return cfg.codex.enabled;
+  if (key === 'codex.model') return cfg.codex.model || '(unset)';
+  if (key === 'codex.sandboxDefault') return cfg.codex.sandboxDefault;
   throw new UsageError(`unknown config key '${key}' (use ${KEYS.join('|')})`);
 }
 
