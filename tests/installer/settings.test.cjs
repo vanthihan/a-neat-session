@@ -171,6 +171,7 @@ describe('installer settings integration', () => {
     const res = runGlobal(['--uninstall']);
     assert.equal(res.status, 0, res.stderr);
     assert.deepEqual(readJson(settings), USER_SETTINGS);
+    assert.equal(fs.readFileSync(settings, 'utf8'), JSON.stringify(USER_SETTINGS), 'original bytes restored');
     assert.ok(res.stdout.includes(`settings backup kept at ${settings}.neat-bak`), res.stdout);
     assert.ok(fs.existsSync(`${settings}.neat-bak`));
   });
