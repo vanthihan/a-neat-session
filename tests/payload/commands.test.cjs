@@ -173,6 +173,14 @@ describe('do.md', () => {
     assert.match(finish, /^- up to 3 merged review findings/m);
   });
 
+  test('Launch checks every route line, so workers briefed before the loop still reach the codex guide', () => {
+    const launch = lines.find((l) => l.startsWith('2. Launch:'));
+    for (const word of ['target=codex', 'action=', 'guide codex', 'before this loop']) {
+      assert.ok(launch.includes(word), `${word} missing from Launch`);
+    }
+    assert.ok(launch.indexOf('guide codex') < launch.indexOf('Agent tool'), 'the route check comes before any launch');
+  });
+
   test(`body is at most ${MAX_BODY_WORDS} words`, () => {
     const words = countWords(body);
     assert.ok(words <= MAX_BODY_WORDS, `${words} words`);
