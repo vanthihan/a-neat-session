@@ -46,8 +46,8 @@ function report({ status = 'done', findings = '- a.js:1 - note', artifacts = '- 
   ].join('\n');
 }
 
-function newRun(task = 'add a hello function', { at = hoursAgo(1), stage = 'explore' } = {}) {
-  const state = rs.createRun(root, { task, mode: 'gate' }, at);
+function newRun(task = 'add a hello function', { at = hoursAgo(1), stage = 'explore', sessionId } = {}) {
+  const state = rs.createRun(root, { task, mode: 'gate', sessionId }, at);
   return rs.saveRun(root, rs.setStage(state, stage), at);
 }
 
@@ -153,6 +153,17 @@ describe('locateRun', () => {
     } finally {
       removeDir(other);
     }
+  });
+
+  test('without a Brief line, the run of the calling session wins over a newer one of another session', () => {
+    const own = newRun('mine', { at: hoursAgo(5), sessionId: 'sess-a' });
+    const other = newRun('theirs', { at: hoursAgo(1), sessionId: 'sess-b' });
+    assert.deepEqual(locateRun({ session_id: 'sess-a' }, env, root), { id: own.id, worker: null });
+    assert.deepEqual(locateRun({ session_id: 'sess-b' }, env, root), { id: other.id, worker: null });
+    assert.equal(locateRun({ session_id: 'sess-c' }, env, root), null, 'only runs of other sessions');
+    assert.equal(locateRun({}, env, root), null, 'unknown session');
+    const unbound = newRun('unbound', { at: hoursAgo(3) });
+    assert.deepEqual(locateRun({ session_id: 'sess-c' }, env, root), { id: unbound.id, worker: null });
   });
 
   test('a Brief line naming a finished run still identifies it', () => {

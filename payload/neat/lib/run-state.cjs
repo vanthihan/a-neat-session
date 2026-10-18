@@ -307,6 +307,23 @@ function activeRuns(root, now = currentTime(), { maxAgeMs = ACTIVE_MAX_AGE_MS } 
     .sort((a, b) => (updatedAtMs(b) || 0) - (updatedAtMs(a) || 0));
 }
 
+function isUnbound(state) {
+  return state.sessionId === null || state.sessionId === undefined;
+}
+
+// The run, out of `runs` (newest first, as from activeRuns), that the Claude
+// Code session `sessionId` works on: the newest run recorded with that
+// session id, else a run with no recorded session. With `onlyRun` such an
+// unbound run counts only when it is the single active run. A run recorded
+// with another session is never returned.
+function runOfSession(runs, sessionId, { onlyRun = false } = {}) {
+  const sid = cleanSessionId(sessionId);
+  const own = sid ? runs.find((s) => s.sessionId === sid) : null;
+  if (own) return own;
+  if (onlyRun) return runs.length === 1 && isUnbound(runs[0]) ? runs[0] : null;
+  return runs.find(isUnbound) || null;
+}
+
 function assertRunFileName(name) {
   const ok = typeof name === 'string' && name.length <= MAX_FILE_NAME
     && name !== 'state.json' && RUN_FILE_NAME.test(name);
@@ -346,5 +363,6 @@ module.exports = {
   setWorker,
   listRuns,
   activeRuns,
+  runOfSession,
   writeRunFile,
 };

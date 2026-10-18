@@ -99,14 +99,15 @@ describe('preBash', () => {
   });
   afterEach(() => removeDir(tmp));
 
-  function newRun(task = 'fix the test', { at = hoursAgo(1), stage = 'implement' } = {}) {
-    const state = rs.createRun(root, { task, mode: 'gate' }, at);
+  function newRun(task = 'fix the test', { at = hoursAgo(1), stage = 'implement', sessionId } = {}) {
+    const state = rs.createRun(root, { task, mode: 'gate', sessionId }, at);
     return rs.saveRun(root, rs.setStage(state, stage), at);
   }
 
-  const bash = (command, extra = {}) => ({
+  const bash = (command, extra = {}, sessionId) => ({
     hook_event_name: 'PreToolUse',
     tool_name: 'Bash',
+    ...(sessionId === undefined ? {} : { session_id: sessionId }),
     tool_input: { command, description: 'Run the tests', timeout: 120000, ...extra },
   });
   const call = (input, ctxRoot = root, helper = HELPER) => preBash(input, env, { root: ctxRoot, helper });
@@ -141,11 +142,36 @@ describe('preBash', () => {
     assert.equal(call(bash('cd app && npm test\r')), '');
   });
 
-  test('the newest active run gets the log', () => {
-    newRun('older', { at: hoursAgo(5) });
-    const { id } = newRun('newer', { at: hoursAgo(2) });
-    const cmd = JSON.parse(call(bash('cargo build'))).hookSpecificOutput.updatedInput.command;
-    assert.ok(cmd.includes(` filter ${id} build `), cmd);
+  test('the run of the calling session gets the log, not the newest run', () => {
+    const own = newRun('older', { at: hoursAgo(5), sessionId: 'sess-a' });
+    const other = newRun('newer', { at: hoursAgo(2), sessionId: 'sess-b' });
+    const logFor = (sid) => JSON.parse(call(bash('cargo build', {}, sid))).hookSpecificOutput.updatedInput.command;
+    assert.ok(logFor('sess-a').includes(` filter ${own.id} build `));
+    assert.ok(logFor('sess-b').includes(` filter ${other.id} build `));
+  });
+
+  test('another session, or an unknown one, is left alone while a run is bound to a session', () => {
+    newRun('mine', { sessionId: 'sess-a' });
+    assert.ok(call(bash('npm test', {}, 'sess-a')).startsWith('{'));
+    assert.equal(call(bash('npm test', {}, 'sess-b')), '', 'other session');
+    assert.equal(call(bash('npm test')), '', 'no session id');
+    assert.equal(call(bash('npm test', {}, '../x')), '', 'malformed session id');
+  });
+
+  test('a run with no recorded session is used only when it is the only active run', () => {
+    const { id } = newRun('unbound', { at: hoursAgo(3) });
+    const cmd = JSON.parse(call(bash('npm test', {}, 'sess-x'))).hookSpecificOutput.updatedInput.command;
+    assert.ok(cmd.includes(` filter ${id} test `), cmd);
+    assert.ok(call(bash('npm test')).startsWith('{'), 'no session id, one unbound run');
+    newRun('second unbound', { at: hoursAgo(2) });
+    assert.equal(call(bash('npm test', {}, 'sess-x')), '', 'two unbound runs');
+    assert.equal(call(bash('npm test')), '');
+  });
+
+  test('a run bound to another session also blocks the unbound fallback', () => {
+    newRun('unbound', { at: hoursAgo(3) });
+    newRun('theirs', { at: hoursAgo(2), sessionId: 'sess-b' });
+    assert.equal(call(bash('npm test', {}, 'sess-c')), '');
   });
 
   test('leaves the command alone in every other case', () => {

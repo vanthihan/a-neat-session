@@ -168,7 +168,9 @@ function rewriteFor(input, env, { root, helper }) {
   if (!fs.existsSync(runState.runsDir(root))) return '';
   if (!filterEnabled(root, env)) return '';
   const now = runState.currentTime(env);
-  const [run] = runState.activeRuns(root, now);
+  // Only the calling session's own run: other sessions in the project, and
+  // runs of other sessions, are never filtered or logged into.
+  const run = runState.runOfSession(runState.activeRuns(root, now), input.session_id, { onlyRun: true });
   if (!run) return '';
   const logPath = logPathFor(root, run.id, kind, now);
   if (!SHELL_SAFE.test(logPath)) return '';

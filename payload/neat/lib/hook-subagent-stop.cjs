@@ -82,12 +82,13 @@ function transcriptTarget(input, root) {
 }
 
 // The run and worker this agent works for: the Brief line of its transcript,
-// else the newest active run with the worker unknown, else null.
+// else the calling session's active run with the worker unknown, else null.
 function locateRun(input, env, root) {
   const found = transcriptTarget(input || {}, root);
   if (found) return found;
-  const [newest] = runState.activeRuns(root, runState.currentTime(env));
-  return newest ? { id: newest.id, worker: null } : null;
+  const runs = runState.activeRuns(root, runState.currentTime(env));
+  const run = runState.runOfSession(runs, (input || {}).session_id);
+  return run ? { id: run.id, worker: null } : null;
 }
 
 // A worker that handed its report back through the handback tool ends with a

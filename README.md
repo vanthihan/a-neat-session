@@ -399,7 +399,9 @@ the global install's hooks stay silent there.
 When a neat worker stops, its final message is checked against the report
 contract: the five headings `## Status`, `## Findings`, `## Decisions`,
 `## Open questions`, `## Artifacts`, a valid status line and at most 300 words.
-A broken report is sent back to the worker with the checker's error lines. After
+A worker is matched to its run by the brief it was given, else by the
+session's own run. A broken report is sent back to the worker with the
+checker's error lines. After
 two rejections the worker may stop anyway and a warning is kept in the run.
 Other agents are never checked.
 
@@ -423,8 +425,8 @@ continues at the right section. Context numbers come from the
 
 ### Noisy output filter (PreToolUse)
 
-While a run is active and `filter.enabled` is `true`, a plain known noisy
-command is rewritten to
+While this session's run is active and `filter.enabled` is `true`, a plain
+known noisy command is rewritten to
 
 ```text
 set -o pipefail; <your command> 2>&1 | node <helper> filter <run-id> <test|build|install> <log>
@@ -434,6 +436,10 @@ The full output goes to `.neat/runs/<id>/logs/`. Output up to 40 lines and
 2000 characters comes back unchanged; longer output is trimmed to a header, the
 failure-relevant lines with a little context and the last lines. The
 command's own exit code is kept.
+
+Only the session that started the run is filtered, and its logs go to that
+run; other sessions in the same project are left alone. A run that recorded
+no session id is used only while it is the only active run.
 
 Recognized commands:
 
