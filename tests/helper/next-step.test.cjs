@@ -273,11 +273,15 @@ describe('nextStep', () => {
     }
   });
 
-  test('a running Codex job comes first', () => {
+  test('a running Codex job comes first, and the next step is computed again after it', () => {
     const state = makeState({ stage: 'test', workers: { tester: 'running' } });
     const next = nextStep(state, facts([], ['job-a1', 'job-b2']));
-    assert.equal(next.section, 'Test');
-    assert.ok(next.line.startsWith(`first run node ${HELPER} codex wait job-a1 job-b2, then `), next.line);
+    assert.deepEqual(next, {
+      section: 'Test',
+      line: `first run node ${HELPER} codex wait job-a1 job-b2, then codex result <job> for each of those jobs, `
+        + `then run resume ${ID} for the next step`,
+    });
+    assert.ok(!next.line.includes('launch it again'), next.line);
   });
 
   test('task ids that are not T<n> or D<n> are never printed', () => {

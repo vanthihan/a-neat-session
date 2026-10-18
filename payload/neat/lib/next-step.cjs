@@ -194,11 +194,14 @@ function pipelineStep(state, facts) {
 }
 
 // A running Codex job of the run must be waited for before anything else.
-function withJobs(next, facts) {
+// The step computed now predates the job's report (it would relaunch the
+// worker), so only the wait, the results and a fresh `run resume` are named.
+function withJobs(next, facts, id) {
   const jobs = facts.runningJobs || [];
   if (!next.section || jobs.length === 0) return next;
   const helper = facts.helper || HELPER;
-  return step(next.section, `first run node ${helper} codex wait ${jobs.join(' ')}, then ${next.line}`);
+  return step(next.section, `first run node ${helper} codex wait ${jobs.join(' ')}, then codex result <job> for each of those jobs, `
+    + `then run resume ${id} for the next step`);
 }
 
 // { section, line }; section is null when there is nothing to resume.
@@ -210,7 +213,7 @@ function nextStep(state, facts = {}) {
   if (!Object.prototype.hasOwnProperty.call(SECTIONS, stage)) {
     return step(null, `unknown stage; run status to check run ${id}`);
   }
-  return withJobs(pipelineStep(state, facts), facts);
+  return withJobs(pipelineStep(state, facts), facts, id);
 }
 
 // The `next:` line printed by `run resume` and injected by the hooks.
