@@ -18,11 +18,13 @@ const DEFAULTS = Object.freeze({
   thresholds: Object.freeze({ soft: 70, hard: 90 }),
   usage: Object.freeze({ capturePath: null }),
   codex: Object.freeze({ enabled: 'auto', model: null, sandboxDefault: 'workspace-write' }),
+  review: Object.freeze({ maxRounds: 2 }),
 });
 
 const CODEX_ENABLED = Object.freeze(['auto', 'on', 'off']);
 const CODEX_SANDBOXES = Object.freeze(['read-only', 'workspace-write']);
 const CODEX_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,63}$/;
+const MAX_REVIEW_ROUNDS = 5;
 
 // Allowed keys per section; a key not listed here is a config error.
 const SCHEMA = Object.freeze({
@@ -30,11 +32,12 @@ const SCHEMA = Object.freeze({
   thresholds: Object.freeze(['soft', 'hard']),
   usage: Object.freeze(['capturePath']),
   codex: Object.freeze(['enabled', 'model', 'sandboxDefault']),
+  review: Object.freeze(['maxRounds']),
 });
 
 const KEYS = Object.freeze([
   'profile', 'thresholds.soft', 'thresholds.hard', 'usage.capturePath',
-  'codex.enabled', 'codex.model', 'codex.sandboxDefault',
+  'codex.enabled', 'codex.model', 'codex.sandboxDefault', 'review.maxRounds',
 ]);
 
 // Local copy of the installer's expandTilde: the payload is installed on its
@@ -104,6 +107,17 @@ function validateCodex(value, scope, fail) {
   return out;
 }
 
+// Allowed in both scopes: a project can only add rounds the user is asked about.
+function validateReview(value, fail) {
+  checkSection('review', value, fail);
+  if (!('maxRounds' in value)) return {};
+  const n = value.maxRounds;
+  if (!Number.isInteger(n) || n < 0 || n > MAX_REVIEW_ROUNDS) {
+    fail(`review.maxRounds must be an integer from 0 to ${MAX_REVIEW_ROUNDS}`);
+  }
+  return { maxRounds: n };
+}
+
 // Validates one parsed file; returns a normalised copy (capturePath expanded).
 function validate(data, { scope, home, fail }) {
   if (!isObject(data)) fail('must be a JSON object');
@@ -135,6 +149,7 @@ function validate(data, { scope, home, fail }) {
     }
   }
   if ('codex' in data) out.codex = validateCodex(data.codex, scope, fail);
+  if ('review' in data) out.review = validateReview(data.review, fail);
   return out;
 }
 
@@ -175,10 +190,12 @@ function layer(cfg, sources, data, source) {
     cfg.usage.capturePath = data.usage.capturePath;
     sources['usage.capturePath'] = source;
   }
-  for (const key of SCHEMA.codex) {
-    if (data.codex && data.codex[key] !== undefined) {
-      cfg.codex[key] = data.codex[key];
-      sources[`codex.${key}`] = source;
+  for (const section of ['codex', 'review']) {
+    for (const key of SCHEMA[section]) {
+      if (data[section] && data[section][key] !== undefined) {
+        cfg[section][key] = data[section][key];
+        sources[`${section}.${key}`] = source;
+      }
     }
   }
 }
@@ -192,6 +209,7 @@ function effectiveConfig({ root, env = process.env, home = os.homedir(), state =
     thresholds: { ...DEFAULTS.thresholds },
     usage: { capturePath: defaultCapturePath(env, home) },
     codex: { ...DEFAULTS.codex },
+    review: { ...DEFAULTS.review },
   };
   const sources = Object.fromEntries(KEYS.map((k) => [k, 'default']));
   layer(cfg, sources, readConfigFile(globalFile, { scope: 'global', home }), 'global');
@@ -219,6 +237,7 @@ function configValue(cfg, key) {
   if (key === 'codex.enabled') return cfg.codex.enabled;
   if (key === 'codex.model') return cfg.codex.model || '(unset)';
   if (key === 'codex.sandboxDefault') return cfg.codex.sandboxDefault;
+  if (key === 'review.maxRounds') return String(cfg.review.maxRounds);
   throw new UsageError(`unknown config key '${key}' (use ${KEYS.join('|')})`);
 }
 

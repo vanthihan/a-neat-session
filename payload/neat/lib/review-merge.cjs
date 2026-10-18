@@ -5,10 +5,14 @@
 // normalise severities, pair findings on the same file within a few lines
 // with similar text, rank agreements first and flag disagreements. Findings
 // are untrusted model output: they are only cleaned, saved and printed.
+// Each merge also updates state.review, the helper-owned fix-round counter
+// that decides whether another fix round may run (`next=`).
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const runState = require('./run-state.cjs');
+const config = require('./config.cjs');
 
 const DICE_MIN = 0.25;
 const SAME_LINE_DICE_MIN = 0.1;
@@ -18,6 +22,7 @@ const MAX_READ_BYTES = 1024 * 1024;
 const MAX_TEXT = 300;
 const MAX_PATH = 200;
 const MERGED_FILE = 'review-merged.md';
+const FIX_SEVERITIES = Object.freeze(['critical', 'warning']);
 
 const SEVERITY_WORDS = Object.freeze({
   critical: 'critical', high: 'critical', blocker: 'critical', error: 'critical',
@@ -226,10 +231,73 @@ function countMerged(merged) {
   return counts;
 }
 
-// Merges the two reviewers of run `id`, writes review-merged.md and returns
-// { file, counts, lines, merged }.
-function mergeRun(root, id) {
-  runState.loadRun(root, id); // unknown run: UsageError before anything is read
+// Pure: critical and warning findings by owning plan task. A finding belongs
+// to every task whose `owns` lists its path; paths no task owns go to
+// `unowned` (once each, first-seen order). Info findings never cause a fix.
+function fixFindings(merged, tasks) {
+  const list = Array.isArray(tasks) ? tasks : [];
+  const byTask = {};
+  const unowned = [];
+  for (const m of merged) {
+    if (!FIX_SEVERITIES.includes(m.severity)) continue;
+    const owners = list.filter((t) => Array.isArray(t.owns) && t.owns.includes(m.path));
+    if (owners.length === 0 && !unowned.includes(m.path)) unowned.push(m.path);
+    owners.forEach((t) => { byTask[t.id] = [...(byTask[t.id] || []), m]; });
+  }
+  const fixTasks = list.map((t) => t.id).filter((id) => byTask[id]);
+  return { fixTasks, unowned, byTask };
+}
+
+// Pure: what the orchestrator does next. `fix` only while fewer than
+// maxRounds fix rounds ran; after that the user decides (gate, step) or the
+// run stops (auto).
+function reviewNext({ fixTasks, fixRounds, maxRounds, mode }) {
+  if (!fixTasks || fixTasks.length === 0) return 'done';
+  if (fixRounds < maxRounds) return 'fix';
+  return mode === 'auto' ? 'stop' : 'ask';
+}
+
+// Pure: a new state with a copy of `review`.
+function setReview(state, review) {
+  const copy = { ...review };
+  for (const key of ['fixTasks', 'unowned']) if (Array.isArray(copy[key])) copy[key] = [...copy[key]];
+  return { ...state, review: copy };
+}
+
+// sha256 over the chosen source files' names and bytes, so re-running a merge
+// on unchanged reviews never counts a new round.
+function fingerprint(sources) {
+  const hash = crypto.createHash('sha256');
+  for (const src of sources) {
+    hash.update(src ? `${path.basename(src.file)}\0` : '-\0');
+    if (src) hash.update(readCapped(src.file)).update('\0');
+  }
+  return hash.digest('hex');
+}
+
+function nextReview(state, merged, inputs, maxRounds) {
+  const prev = state.review || null;
+  const reviews = prev && prev.inputs === inputs ? prev.reviews : ((prev && prev.reviews) || 0) + 1;
+  const { fixTasks, unowned } = fixFindings(merged, state.tasks);
+  const counts = countMerged(merged);
+  return {
+    reviews,
+    fixRounds: reviews - 1,
+    maxRounds,
+    critical: counts.critical,
+    warning: counts.warning,
+    info: counts.info,
+    fixTasks,
+    unowned,
+    inputs,
+  };
+}
+
+// Merges the two reviewers of run `id`, writes review-merged.md, updates
+// state.review and returns { file, counts, lines, merged, review, next }.
+function mergeRun(root, id, { env = process.env, now = null } = {}) {
+  const state = runState.loadRun(root, id); // unknown run: UsageError before anything is read
+  const { maxRounds } = config.effectiveConfig({ root, env, state }).review;
   const dir = runState.runDir(root, id);
   const a = pickSource(dir, 'reviewer', 'claude');
   const b = pickSource(dir, 'reviewer-2', 'claude-2');
@@ -241,7 +309,10 @@ function mergeRun(root, id) {
     secondLabel: b ? b.label : 'codex',
   });
   const file = runState.writeRunFile(root, id, MERGED_FILE, formatMerged(merged));
-  return { file, counts: countMerged(merged), lines: merged.map(formatLine), merged };
+  const review = nextReview(state, merged, fingerprint([a, b]), maxRounds);
+  runState.saveRun(root, setReview(state, review), now || runState.currentTime(env));
+  const next = reviewNext({ ...review, mode: state.mode });
+  return { file, counts: countMerged(merged), lines: merged.map(formatLine), merged, review, next };
 }
 
 module.exports = {
@@ -257,5 +328,8 @@ module.exports = {
   similarity,
   mergeFindings,
   formatMerged,
+  fixFindings,
+  reviewNext,
+  setReview,
   mergeRun,
 };

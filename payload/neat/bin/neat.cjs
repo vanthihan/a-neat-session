@@ -37,13 +37,13 @@ const HELP = [
   'neat run commit <run-id>',
   'neat stages <run-id> --type <small-fix|feature|refactor|research|docs> [--research] [--mode gate|auto|step]',
   'neat plan check <run-id>',
-  'neat brief <run-id> <worker> [--stdin]',
+  'neat brief <run-id> <worker> [--stdin] [--fix]',
   'neat route <run-id> <worker|--all>',
   'neat write <run-id> <file-name> --stdin',
   'neat report check <file>',
   'neat review merge <run-id>',
   'neat config show [<run-id>]',
-  'neat config get <profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault>',
+  'neat config get <profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault|review.maxRounds>',
   'neat status [--json]',
   'neat usage-capture [--path <file>] [--quiet]',
   ...codexCli.HELP_LINES,
@@ -271,13 +271,17 @@ function cmdPlanCheck(args) {
   return printResult(planCheck.checkPlan(root, args[0], runState.currentTime(process.env)));
 }
 
+const BRIEF_USAGE = 'usage: neat brief <run-id> <worker> [--stdin] [--fix]';
+const BRIEF_FLAGS = Object.freeze(['--stdin', '--fix']);
+
 function cmdBrief(args) {
-  const [id, worker, flag] = args;
-  const ok = id && worker && (args.length === 2 || (args.length === 3 && flag === '--stdin'));
-  if (!ok) throw new UsageError('usage: neat brief <run-id> <worker> [--stdin]');
-  const notes = flag === '--stdin' ? readStdin() : '';
+  const [id, worker, ...flags] = args;
+  const ok = id && worker && flags.every((f) => BRIEF_FLAGS.includes(f)) && new Set(flags).size === flags.length;
+  if (!ok) throw new UsageError(BRIEF_USAGE);
+  const notes = flags.includes('--stdin') ? readStdin() : '';
   const root = runState.projectRoot(process.env, process.cwd());
-  const result = brief.writeBrief(root, id, worker, notes, runState.currentTime(process.env), process.env);
+  const opts = { fix: flags.includes('--fix') };
+  const result = brief.writeBrief(root, id, worker, notes, runState.currentTime(process.env), process.env, opts);
   out(result.file);
   out(route.formatRoute(result.route));
   return 0;
@@ -358,13 +362,16 @@ function cmdUsageCapture(args) {
 }
 
 // Merges both reviewers' findings into review-merged.md. Prints a counts line
-// (later fields may be appended), the top findings and the file path.
+// ending in the fix round and the next step, the fix tasks, files with
+// findings no task owns, the top findings and the file path (at most 9 lines).
 function cmdReviewMerge(args) {
   if (args.length !== 1) throw new UsageError('usage: neat review merge <run-id>');
   const root = runState.projectRoot(process.env, process.cwd());
-  const { file, counts, lines } = reviewMerge.mergeRun(root, args[0]);
+  const { file, counts, lines, review, next } = reviewMerge.mergeRun(root, args[0], { env: process.env });
   const fields = ['critical', 'warning', 'info', 'both', 'disputed'].map((k) => `${k}=${counts[k]}`);
-  out(`merged ${fields.join(' ')}`);
+  out(`merged ${fields.join(' ')} round=${review.fixRounds}/${review.maxRounds} next=${next}`);
+  if (review.fixTasks.length > 0) out(`fix=${review.fixTasks.join(',')}`);
+  if (review.unowned.length > 0) out(`unowned=${review.unowned.join(',')}`.slice(0, MAX_MERGE_LINE));
   const top = lines.slice(0, MAX_MERGE_TOP).map((l) => l.slice(0, MAX_MERGE_LINE));
   out(top.length > 0 ? top.join('\n') : 'none');
   out(`file: ${file}`);
