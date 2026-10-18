@@ -10,6 +10,7 @@ const { effectiveConfig } = require('./config.cjs');
 const { UsageError } = require('./cli-args.cjs');
 const { COMPLEXITIES, WORKER_NAME } = require('./run-state.cjs');
 const { readUsage, formatPercent } = require('./usage.cjs');
+const codex = require('./codex.cjs');
 
 const TIERS = Object.freeze(['haiku', 'sonnet', 'opus']);
 const ROLES = Object.freeze(['explorer', 'researcher', 'implementer', 'reviewer', 'tester', 'docs']);
@@ -84,22 +85,32 @@ function formatRoute(r) {
     `stepdown=${yesNo(r.stepdown)}`,
     `hard=${yesNo(r.hard)}`,
     `ctx=${formatPercent(r.ctx)}`,
+    `target=${r.target || 'claude'}`,
+    `action=${r.action || 'run'}`,
   ].join(' ');
 }
 
 // Full route record for `worker` in run `state`. The profile comes from the
 // layered config (state.profile wins over project, global and default). Usage
 // comes from the capture at the effective usage.capturePath, judged at `now`:
-// at or above thresholds.soft the worker drops one tier; thresholds.hard is
-// only reported. Context usage is reported and never changes the route.
+// at or above thresholds.soft the worker drops one tier; thresholds.hard
+// decides the engine: at or above it a Codex-eligible worker goes to Codex
+// when Codex is found. Codex is never probed below hard. Context usage is
+// reported and never changes the route.
 function routeWorker(root, state, worker, env = process.env, now = new Date(), home = os.homedir()) {
   const cfg = effectiveConfig({ root, env, home, state });
   const profile = cfg.profile;
+  const role = roleOf(worker);
   const complexity = COMPLEXITIES.includes(state.complexity) ? state.complexity : DEFAULT_COMPLEXITY;
   const { usage, ctx } = readUsage(cfg.usage.capturePath, now);
-  const r = routeFor({ role: roleOf(worker), profile, complexity, usage, soft: cfg.thresholds.soft });
+  const r = routeFor({ role, profile, complexity, usage, soft: cfg.thresholds.soft });
   const hard = usage !== null && usage >= cfg.thresholds.hard;
-  return { worker, model: r.model, effort: r.effort, profile, complexity, usage, stepdown: r.stepdown, hard, ctx };
+  const onCodex = hard && codex.ELIGIBLE_ROLES.includes(role) && codex.detect(env).found;
+  return {
+    worker, model: r.model, effort: r.effort, profile, complexity, usage, stepdown: r.stepdown, hard, ctx,
+    target: onCodex ? 'codex' : 'claude',
+    action: 'run',
+  };
 }
 
 // `neat route` accepts any run worker name or a bare role.

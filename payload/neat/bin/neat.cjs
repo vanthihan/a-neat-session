@@ -17,6 +17,7 @@ const route = require(path.join(LIB, 'route.cjs'));
 const config = require(path.join(LIB, 'config.cjs'));
 const usage = require(path.join(LIB, 'usage.cjs'));
 const stages = require(path.join(LIB, 'stages.cjs'));
+const codexCli = require(path.join(LIB, 'cli-codex.cjs'));
 
 const MAX_ERROR_LINES = 5;
 
@@ -38,6 +39,7 @@ const HELP = [
   'neat config get <profile|thresholds.soft|thresholds.hard|usage.capturePath>',
   'neat status [--json]',
   'neat usage-capture [--path <file>] [--quiet]',
+  ...codexCli.HELP_LINES,
   'neat help',
 ].join('\n');
 
@@ -342,6 +344,7 @@ function dispatch(argv) {
   if (cmd === 'status') return cmdStatus(argv.slice(1));
   if (cmd === 'write') return cmdWrite(argv.slice(1));
   if (cmd === 'report' && sub === 'check') return cmdReportCheck(rest);
+  if (cmd === 'codex') return codexCli.dispatchCodex(argv.slice(1), { out, env: process.env, cwd: process.cwd(), readStdin });
   if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
     out(HELP);
     return 0;
@@ -350,13 +353,26 @@ function dispatch(argv) {
   return 2;
 }
 
+function fail(err) {
+  process.stderr.write(`neat: ${err.message}\n`);
+  return err.exitCode === 2 ? 2 : 1;
+}
+
+// Exit code, or a Promise of it for the async verbs.
 function main(argv) {
   try {
-    return dispatch(argv);
+    const code = dispatch(argv);
+    return code instanceof Promise ? code.catch(fail) : code;
   } catch (err) {
-    process.stderr.write(`neat: ${err.message}\n`);
-    return err.exitCode === 2 ? 2 : 1;
+    return fail(err);
   }
 }
 
-process.exitCode = main(process.argv.slice(2));
+const exit = main(process.argv.slice(2));
+if (exit instanceof Promise) {
+  exit.then((code) => {
+    process.exitCode = code;
+  });
+} else {
+  process.exitCode = exit;
+}
