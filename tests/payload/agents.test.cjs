@@ -8,7 +8,7 @@ const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { REPO_ROOT } = require('../support/helpers.cjs');
+const { REPO_ROOT, runNode } = require('../support/helpers.cjs');
 
 const AGENTS_DIR = path.join(REPO_ROOT, 'payload', 'agents');
 const FRONTMATTER_KEYS = ['name', 'description', 'tools', 'model', 'maxTurns'];
@@ -53,9 +53,11 @@ function toolList(fields) {
   return fields.tools.split(',').map((t) => t.trim());
 }
 
-test('payload/agents holds exactly the six workers', () => {
+const ORCHESTRATOR = 'neat-orchestrator';
+
+test('payload/agents holds exactly the six workers and the session orchestrator', () => {
   const files = fs.readdirSync(AGENTS_DIR).sort();
-  assert.deepEqual(files, Object.keys(MATRIX).map((n) => `${n}.md`).sort());
+  assert.deepEqual(files, [...Object.keys(MATRIX), ORCHESTRATOR].map((n) => `${n}.md`).sort());
 });
 
 for (const [name, spec] of Object.entries(MATRIX)) {
@@ -188,5 +190,105 @@ describe('neat-reviewer file names', () => {
     assert.match(review, /`path:line - high\|medium\|low - issue`/);
     assert.match(report, /`Report:`/);
     assert.match(report, /`report ok`/);
+  });
+});
+
+// Splits a frontmatter tools line on top-level commas, so `Agent(a, b)` stays one entry.
+function splitTools(line) {
+  const out = [];
+  let depth = 0;
+  let cur = '';
+  for (const ch of line) {
+    if (ch === '(') depth += 1;
+    if (ch === ')') depth -= 1;
+    if (ch === ',' && depth === 0) {
+      out.push(cur.trim());
+      cur = '';
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+const HELPER = path.join(REPO_ROOT, 'payload', 'neat', 'bin', 'neat.cjs');
+
+// Subcommand word sequences listed by `neat help` (`neat run new [...]` -> `run new`).
+function helpSubcommands() {
+  const res = runNode([HELPER, 'help']);
+  assert.equal(res.status, 0, res.stderr);
+  return res.stdout.split('\n')
+    .filter((line) => line.startsWith('neat '))
+    .map((line) => {
+      const words = [];
+      for (const word of line.split(/\s+/).slice(1)) {
+        if (word.startsWith('[') || word.startsWith('<')) break;
+        words.push(word);
+      }
+      return words.join(' ');
+    });
+}
+
+const countWords = (text) => text.trim().split(/\s+/).filter(Boolean).length;
+const ORCHESTRATOR_KEYS = ['name', 'description', 'tools', 'model'];
+const ORCHESTRATOR_TOOLS = [
+  'Bash',
+  `Agent(${Object.keys(MATRIX).join(', ')})`,
+  'AskUserQuestion',
+  'SendMessage',
+];
+const FILE_TOOLS = ['Read', 'Edit', 'Write', 'NotebookEdit', 'Grep', 'Glob', 'WebFetch', 'WebSearch'];
+const MAX_ORCHESTRATOR_WORDS = 400;
+
+describe(ORCHESTRATOR, () => {
+  const text = load(ORCHESTRATOR);
+  const { keys, fields, body } = parseAgent(text);
+
+  test('frontmatter keys are exactly name, description, tools, model', () => {
+    assert.deepEqual(keys, ORCHESTRATOR_KEYS);
+    assert.equal(fields.name, ORCHESTRATOR);
+    assert.equal(fields.model, 'inherit');
+  });
+
+  test('description is short, names the installer flag and says it is never a worker', () => {
+    assert.ok(fields.description.length <= MAX_DESCRIPTION, `${fields.description.length} chars`);
+    assert.ok(fields.description.includes('--orchestrator-default'));
+    assert.match(fields.description, /main.session/i);
+    assert.match(fields.description, /never .*worker/i);
+  });
+
+  test('tools are Bash, Agent limited to the six workers, AskUserQuestion and SendMessage', () => {
+    const tools = splitTools(fields.tools);
+    assert.deepEqual(tools, ORCHESTRATOR_TOOLS);
+    const allow = tools[1].slice('Agent('.length, -1).split(',').map((t) => t.trim());
+    assert.deepEqual(allow, Object.keys(MATRIX));
+    assert.ok(!allow.includes(ORCHESTRATOR));
+    for (const t of FILE_TOOLS) assert.ok(!tools.includes(t), t);
+  });
+
+  test('body runs the helper procedure and covers resume, untrusted reports and slash commands', () => {
+    assert.ok(body.includes('node {{NEAT_BIN}} procedure'));
+    assert.ok(body.includes('/neat:resume'));
+    assert.match(body, /untrusted/);
+    assert.match(body, /slash commands/i);
+    assert.match(body, /task text/);
+    assert.match(body, /[Nn]ever read, search or edit repository files/);
+    assert.match(body, /never run git/);
+  });
+
+  test('every helper call names a subcommand from neat help', () => {
+    const known = helpSubcommands();
+    const calls = [...body.matchAll(/node \{\{NEAT_BIN\}\}( [^`\n]*)?/g)].map((m) => (m[1] || '').trim());
+    assert.ok(calls.length >= 1);
+    for (const call of calls) {
+      const words = call.split(/\s+/);
+      assert.ok(known.some((sub) => sub.split(' ').every((w, i) => words[i] === w)), `unknown helper call: ${call}`);
+    }
+  });
+
+  test('body is at most 400 words and takes no $ARGUMENTS', () => {
+    assert.ok(countWords(body) <= MAX_ORCHESTRATOR_WORDS, `${countWords(body)} words`);
+    assert.ok(!text.includes('$ARGUMENTS'));
   });
 });

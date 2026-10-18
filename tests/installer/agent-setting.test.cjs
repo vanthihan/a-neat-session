@@ -276,6 +276,14 @@ describe('installer --orchestrator-default', () => {
     assert.ok(!fs.existsSync(localSettings));
   });
 
+  test('the installed orchestrator agent names the installed helper', () => {
+    ok(runLocal([]));
+    const agentFile = path.join(target, 'agents', 'neat-orchestrator.md');
+    const text = fs.readFileSync(agentFile, 'utf8');
+    assert.ok(!text.includes('{{NEAT_BIN}}'));
+    assert.ok(text.includes(`node ${path.join(target, 'neat', 'bin', 'neat.cjs')} procedure`), text);
+  });
+
   test('a tampered record makes uninstall refuse without writing settings', () => {
     ok(runLocal(['--orchestrator-default']));
     const mPath = path.join(target, 'neat', 'manifest.json');
