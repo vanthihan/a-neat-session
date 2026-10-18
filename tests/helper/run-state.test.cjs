@@ -51,8 +51,9 @@ test('createRun writes state.json with the documented fields', () => {
   assert.equal(onDisk.task, 'fix bug');
   assert.equal(onDisk.mode, 'gate');
   assert.equal(onDisk.stage, 'created');
-  assert.deepEqual(onDisk.stages.map((s) => s.name), ['explore', 'plan', 'implement', 'review', 'test', 'docs']);
-  assert.ok(onDisk.stages.every((s) => s.status === 'pending'));
+  assert.deepEqual(onDisk.stages.map((s) => s.name),
+    ['explore', 'research', 'plan', 'implement', 'review', 'test', 'docs']);
+  assert.deepEqual(onDisk.stages.filter((s) => s.status !== 'pending'), [{ name: 'research', status: 'skipped' }]);
   assert.deepEqual(onDisk.workers, []);
   assert.equal(onDisk.createdAt, NOW.toISOString());
   assert.equal(onDisk.updatedAt, NOW.toISOString());

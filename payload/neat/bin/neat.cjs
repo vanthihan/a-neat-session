@@ -8,7 +8,7 @@ const path = require('node:path');
 const LIB = path.join(__dirname, '..', 'lib');
 const runState = require(path.join(LIB, 'run-state.cjs'));
 const reportCheck = require(path.join(LIB, 'report-check.cjs'));
-const { parseTaskArgs, UsageError } = require(path.join(LIB, 'cli-args.cjs'));
+const { parseTaskArgs, UsageError, MODES } = require(path.join(LIB, 'cli-args.cjs'));
 const { formatStatus } = require(path.join(LIB, 'status.cjs'));
 const planCheck = require(path.join(LIB, 'plan-check.cjs'));
 const brief = require(path.join(LIB, 'brief.cjs'));
@@ -16,17 +16,19 @@ const gitOps = require(path.join(LIB, 'git-ops.cjs'));
 const route = require(path.join(LIB, 'route.cjs'));
 const config = require(path.join(LIB, 'config.cjs'));
 const usage = require(path.join(LIB, 'usage.cjs'));
+const stages = require(path.join(LIB, 'stages.cjs'));
 
 const MAX_ERROR_LINES = 5;
 
 const HELP = [
   'neat run new [--stdin] [--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [task]',
-  'neat run stage <run-id> <explore|plan|implement|review|test|docs|done|cancelled>',
+  'neat run stage <run-id> <explore|research|plan|implement|review|test|docs|done|cancelled>',
   'neat run worker <run-id> <name> <running|done|failed|report-invalid>',
   'neat run classify <run-id> <trivial|normal|risky>',
   'neat run guard <run-id> [--tasks T1,T2]',
   'neat run diff <run-id>',
   'neat run commit <run-id>',
+  'neat stages <run-id> --type <small-fix|feature|refactor|research|docs> [--research] [--mode gate|auto|step]',
   'neat plan check <run-id>',
   'neat brief <run-id> <worker> [--stdin]',
   'neat route <run-id> <worker|--all>',
@@ -74,8 +76,55 @@ function cmdRunStage(args) {
   const [id, stage] = args;
   const root = runState.projectRoot(process.env, process.cwd());
   const state = runState.loadRun(root, id);
+  if (stages.isSkipped(state, stage)) {
+    out(`stage ${stage} skipped`);
+    return 0;
+  }
   runState.saveRun(root, runState.setStage(state, stage), runState.currentTime(process.env));
   out(`stage ${stage}`);
+  return 0;
+}
+
+const STAGES_USAGE = 'usage: neat stages <run-id> --type <type> [--research] [--mode gate|auto|step]';
+
+// Reads `--type <t>`, `--research` and `--mode <m>` (also `--flag=value`);
+// any other token, a missing value or a repeated flag is a usage error.
+function stagesFlags(args) {
+  const flags = { type: null, research: false, mode: null };
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    const eq = a.indexOf('=');
+    const name = eq > 0 ? a.slice(0, eq) : a;
+    if (name === '--research' && eq < 0 && !flags.research) {
+      flags.research = true;
+      continue;
+    }
+    const key = { '--type': 'type', '--mode': 'mode' }[name];
+    if (!key || flags[key] !== null) throw new UsageError(STAGES_USAGE);
+    const value = eq > 0 ? a.slice(eq + 1) : args[(i += 1)];
+    if (!value) throw new UsageError(`${name} needs a value`);
+    flags[key] = value;
+  }
+  if (flags.type === null) throw new UsageError(STAGES_USAGE);
+  if (flags.mode !== null && !MODES.includes(flags.mode)) {
+    throw new UsageError(`invalid --mode '${flags.mode}' (use ${MODES.join('|')})`);
+  }
+  return flags;
+}
+
+// Records the stages a task type runs; propose=yes lets the orchestrator
+// offer research (gate or step mode, research not already selected).
+function cmdStages(args) {
+  const [id, ...rest] = args;
+  if (!id) throw new UsageError(STAGES_USAGE);
+  const flags = stagesFlags(rest);
+  const root = runState.projectRoot(process.env, process.cwd());
+  const state = runState.loadRun(root, id);
+  const selected = stages.selectStages(flags.type, { research: flags.research || state.research === true });
+  runState.saveRun(root, stages.applyStages(state, flags.type, selected), runState.currentTime(process.env));
+  const mode = flags.mode || state.mode;
+  const propose = (mode === 'gate' || mode === 'step') && !selected.includes('research') ? 'yes' : 'no';
+  out(`stages ${selected.join(',')} type=${flags.type} propose=${propose}`);
   return 0;
 }
 
@@ -285,6 +334,7 @@ function dispatch(argv) {
   if (cmd === 'run' && sub === 'guard') return cmdRunGuard(rest);
   if (cmd === 'run' && sub === 'diff') return cmdRunDiff(rest);
   if (cmd === 'run' && sub === 'commit') return cmdRunCommit(rest);
+  if (cmd === 'stages') return cmdStages(argv.slice(1));
   if (cmd === 'plan' && sub === 'check') return cmdPlanCheck(rest);
   if (cmd === 'brief') return cmdBrief(argv.slice(1));
   if (cmd === 'config') return cmdConfig(sub, rest);

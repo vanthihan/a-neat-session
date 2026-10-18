@@ -6,7 +6,7 @@ const { execFileSync } = require('node:child_process');
 const { UsageError } = require('./cli-args.cjs');
 const gitLib = require('./git.cjs');
 
-const PIPELINE = Object.freeze(['explore', 'plan', 'implement', 'review', 'test', 'docs']);
+const PIPELINE = Object.freeze(['explore', 'research', 'plan', 'implement', 'review', 'test', 'docs']);
 const STAGES = Object.freeze([...PIPELINE, 'done', 'cancelled']);
 const WORKER_NAME = /^(explorer|reviewer|tester|implementer-T\d+|docs-D\d+)$/;
 const WORKER_STATUSES = Object.freeze(['running', 'done', 'failed', 'report-invalid']);
@@ -124,7 +124,8 @@ function createRun(root, { task, mode, profile }, now = currentTime()) {
     mode,
     profile: profile || null,
     stage: 'created',
-    stages: PIPELINE.map((name) => ({ name, status: 'pending' })),
+    // research runs only when selected (`neat stages`), so it starts skipped.
+    stages: PIPELINE.map((name) => ({ name, status: name === 'research' ? 'skipped' : 'pending' })),
     workers: [],
     ...baseline,
     tasks: [],
