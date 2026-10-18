@@ -67,3 +67,19 @@ test('package.json has no dependencies and no install lifecycle scripts', () => 
     assert.ok(!(pkg.scripts && pkg.scripts[script]), `scripts.${script} must not exist`);
   }
 });
+
+// Internal planning and review ids (requirement ids such as ABC-01, review ids
+// such as IN-11, roadmap phases) mean nothing to readers of the package.
+const PLANNING_ID = /\b(?:[A-Z]{2,6}-\d{2,3}|[Pp]hase \d+)\b/;
+
+test('no shipped file references an internal planning or review id', () => {
+  const hits = [];
+  for (const file of shipped()) {
+    const lines = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8').split('\n');
+    lines.forEach((line, i) => {
+      const m = line.match(PLANNING_ID);
+      if (m) hits.push(`${file}:${i + 1}:${m[0]}`);
+    });
+  }
+  assert.deepEqual(hits, [], `planning ids in shipped files:\n${hits.join('\n')}`);
+});

@@ -38,7 +38,8 @@ function entryOf(state, name) {
 }
 
 // The selected pipeline stages: the recorded selection, else (no `stages`
-// call yet, or a Phase 1 state) every pipeline stage present and not skipped.
+// call yet, or a run created before stage selection existed) every pipeline
+// stage present and not skipped.
 function selectedOf(state) {
   if (Array.isArray(state.selectedStages)) return [...state.selectedStages];
   return PIPELINE.filter((name) => {
@@ -59,8 +60,8 @@ function applyStages(state, type, selected) {
   return { ...state, type, selectedStages: [...selected], stages };
 }
 
-// True for a pipeline stage that is skipped or has no entry (Phase 1 states
-// have no research entry).
+// True for a pipeline stage that is skipped or has no entry (runs created
+// before the research stage existed have no research entry).
 function isSkipped(state, stage) {
   if (!PIPELINE.includes(stage)) return false;
   const entry = entryOf(state, stage);

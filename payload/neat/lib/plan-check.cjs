@@ -21,7 +21,8 @@ const WORKER_FOR_PREFIX = Object.freeze({ T: 'implementer', D: 'docs' });
 const RESERVED_TOP = Object.freeze(['.claude']);
 const RESERVED_ANYWHERE = Object.freeze(['.neat', '.git']);
 const MAX_ERROR_LINES = 10;
-// Stages a run has when `neat stages` was never called (Phase 1 rules).
+// Stages a run has when `neat stages` was never called (also runs created
+// before stage selection existed).
 const DEFAULT_SELECTED = Object.freeze(['explore', 'plan', 'implement', 'review', 'test', 'docs']);
 // Task kind -> the stage that runs it and the error when none is planned.
 const KINDS = Object.freeze([

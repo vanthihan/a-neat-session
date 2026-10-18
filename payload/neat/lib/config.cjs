@@ -18,7 +18,7 @@ const DEFAULTS = Object.freeze({
   usage: Object.freeze({ capturePath: null }),
 });
 
-// Allowed keys per section; Phase 3 extends this allow-list.
+// Allowed keys per section; a key not listed here is a config error.
 const SCHEMA = Object.freeze({
   profile: null,
   thresholds: Object.freeze(['soft', 'hard']),
