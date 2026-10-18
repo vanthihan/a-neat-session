@@ -164,10 +164,13 @@ function reviewStep(state, facts) {
   const review = state.review && typeof state.review === 'object' ? state.review : null;
   const reviewersDone = ['reviewer', 'reviewer-2'].every((w) => workerStatus(state, w) === 'done');
   const noFixes = review && Array.isArray(review.fixTasks) && review.fixTasks.length === 0;
-  if (noFixes && reviewersDone) return advance(state, 'review');
-  if (hasReport(facts, 'reviewer') && hasReport(facts, 'reviewer-2')) {
-    return step('Review', `guide review step 3 (review merge ${state.id})`);
+  const merge = step('Review', `guide review step 3 (review merge ${state.id})`);
+  if (noFixes && reviewersDone) {
+    // A critical finding no task owns needs the user's decision (or stops an
+    // auto run); that decision is not kept on disk, so merge again to get it.
+    return Number(review.unownedCritical) > 0 ? merge : advance(state, 'review');
   }
+  if (hasReport(facts, 'reviewer') && hasReport(facts, 'reviewer-2')) return merge;
   return step('Review', 'guide review from step 1');
 }
 

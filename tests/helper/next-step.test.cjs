@@ -177,6 +177,17 @@ describe('nextStep', () => {
     assert.deepEqual(nextStep(fixes, facts(['report-reviewer.md'])), { section: 'Review', line: 'guide review from step 1' });
   });
 
+  test('review: a critical finding no task owns -> merge again for the decision, never on to Test', () => {
+    const workers = { reviewer: 'done', 'reviewer-2': 'done' };
+    const reports = facts(['report-reviewer-2.md', 'report-reviewer.md']);
+    for (const mode of ['gate', 'auto', 'step']) {
+      const state = makeState({ stage: 'review', mode, workers, extra: { review: { fixTasks: [], unownedCritical: 1 } } });
+      assert.deepEqual(nextStep(state, reports), { section: 'Review', line: `guide review step 3 (review merge ${ID})` }, mode);
+    }
+    const clean = makeState({ stage: 'review', workers, extra: { review: { fixTasks: [], unownedCritical: 0 } } });
+    assert.equal(nextStep(clean, reports).section, 'Test');
+  });
+
   test('test: done -> next stage; report -> Check; else Test', () => {
     assert.equal(nextStep(makeState({ stage: 'test', workers: { tester: 'done' }, extra: { guarded: ['test'] } }), facts()).section, 'Docs');
     assert.deepEqual(nextStep(makeState({ stage: 'test', workers: { tester: 'running' } }), facts(['report-tester.md'])), {
