@@ -1,6 +1,6 @@
 ---
 description: Run a task through neat workers (explore, plan, implement, review, test, docs) so this window only receives short reports.
-argument-hint: "[--mode gate|auto|step] [--] TASK"
+argument-hint: "[--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [--] TASK"
 allowed-tools: Bash(node {{NEAT_BIN}} *), Agent, AskUserQuestion, SendMessage
 disable-model-invocation: true
 ---
@@ -18,8 +18,8 @@ You are the neat orchestrator for this run. Follow the sections below in order.
 
 ## Worker loop
 Every stage runs this routine for a worker list W and guard arguments G:
-1. Brief: for each worker w run `node {{NEAT_BIN}} brief {id} {w}` and keep the printed path. Only when a stage supplies notes, add `--stdin` and pass the notes in a `<<'NEAT_EOF'` heredoc ending with `NEAT_EOF`.
-2. Launch: start all workers of W in ONE message with the Agent tool. subagent_type is `neat-implementer` for `implementer-T*`, `neat-docs` for `docs-D*`, and `neat-explorer`, `neat-reviewer` or `neat-tester` for the others (`neat-{w}`). The prompt is exactly `Brief: ` followed by that worker's brief path. Pass only subagent_type, a short description and that prompt.
+1. Brief: for each worker w run `node {{NEAT_BIN}} brief {id} {w}`; it prints the brief path, then a line `route worker={w} model={m} effort={e} ...`. Keep both. Only when a stage supplies notes, add `--stdin` and pass the notes in a `<<'NEAT_EOF'` heredoc ending with `NEAT_EOF`.
+2. Launch: start all workers of W in ONE message with the Agent tool. subagent_type is `neat-implementer` for `implementer-T*`, `neat-docs` for `docs-D*`, and `neat-explorer`, `neat-reviewer` or `neat-tester` for the others (`neat-{w}`). The prompt is exactly `Brief: ` followed by that worker's brief path. Pass only subagent_type, a short description, that prompt, and `model` and `effort` copied from that worker's route line; omit `model` when it is `inherit` and `effort` when it is `none`. If the Agent tool rejects `effort`, launch again without it.
 3. Wait: end your turn with `Waiting for: {W}`. Continue only after every launched worker's completion notification has arrived. If the Agent tool returned the results directly, continue at once. Never poll, sleep or read transcripts.
 4. Check: for each w run `node {{NEAT_BIN}} report check {dir}/report-{w}.md`. On exit 1, send the printed error lines once with SendMessage to that worker asking for a corrected report, end your turn, then check again. A second failure: `run worker {id} {w} report-invalid`. Otherwise run `run worker {id} {w} done`, or `run worker {id} {w} failed` when its Status says failed.
 5. Guard: run `node {{NEAT_BIN}} run guard {id} {G}`. On exit 1: in auto mode run `run stage {id} cancelled` and go to Finish showing the violation lines; in gate and step mode ask with AskUserQuestion, showing the violation lines, with options Continue / Stop (Stop: `run stage {id} cancelled`, go to Finish).
@@ -60,7 +60,7 @@ gate and step: ask with AskUserQuestion, showing at most 15 lines (task ids, tit
 auto: skip this section without asking.
 
 ## Implement
-Run `node {{NEAT_BIN}} run stage {id} implement`. For each batch in the `implement=` part, in order, run the Worker loop with W = `implementer-{T}` for every task in the batch and G = `--tasks {comma-separated task ids of the batch}`. Tasks in one batch own disjoint files and run in parallel; batches run one after another. The guard checks a batch against all files its tasks own, so it cannot tell which task of a batch edited a file.
+Run `node {{NEAT_BIN}} run stage {id} implement`. For each batch in the `implement=` part, in order, run the Worker loop with W = `implementer-{T}` for every task in the batch and G = `--tasks {comma-separated task ids of the batch}`. Tasks in one batch own disjoint files and run in parallel; batches run one after another.
 
 Step mode: after the user continues, run `node {{NEAT_BIN}} run commit {id}` and keep its output line.
 

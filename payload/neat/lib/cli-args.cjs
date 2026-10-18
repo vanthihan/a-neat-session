@@ -1,11 +1,13 @@
 'use strict';
 
-// Parses the raw /neat:do argument text into { task, mode }.
-// Flags are recognised only as leading tokens or a trailing `--mode` pair;
+// Parses the raw /neat:do argument text into { task, mode, profile }.
+// Flags are recognised only as leading tokens or trailing `--mode`/`--profile` pairs;
 // everything else is task text, kept byte-exact (inner whitespace included).
 
 const MODES = Object.freeze(['gate', 'auto', 'step']);
 const DEFAULT_MODE = 'gate';
+const PROFILES = Object.freeze(['adaptive', 'quality', 'balanced', 'budget', 'inherit']);
+const DEFAULT_PROFILE = 'adaptive';
 
 class UsageError extends Error {
   constructor(message) {
@@ -26,59 +28,77 @@ function tokenize(text) {
 }
 
 function unknownFlag(token) {
-  return new UsageError(`unknown flag ${token.split('=')[0]} (valid: --mode; put -- before a task that starts with a flag)`);
+  return new UsageError(`unknown flag ${token.split('=')[0]} (valid: --mode, --profile; put -- before a task that starts with a flag)`);
 }
 
-function checkMode(value) {
-  if (value === undefined) throw new UsageError(`--mode needs a value (use ${MODES.join('|')})`);
-  if (!MODES.includes(value)) throw new UsageError(`invalid --mode '${value}' (use ${MODES.join('|')})`);
-  return value;
-}
-
-// Returns a recorder that rejects a second --mode.
-function modeRecorder() {
-  let mode = null;
+// Returns a recorder for one value flag (`--mode`, `--profile`): rejects a
+// missing value, a value outside `allowed` and a second occurrence.
+// `strictTrailing`: a trailing `--flag=<value>` always counts as the flag (an
+// invalid value is an error) instead of falling back to task text.
+function flagRecorder(flag, allowed, strictTrailing = false) {
+  let value = null;
+  const choices = allowed.join('|');
   return {
-    set(value) {
-      if (mode !== null) throw new UsageError('duplicate --mode');
-      mode = checkMode(value);
+    flag,
+    allowed,
+    strictTrailing,
+    set(v) {
+      if (value !== null) throw new UsageError(`duplicate ${flag}`);
+      if (v === undefined) throw new UsageError(`${flag} needs a value (use ${choices})`);
+      if (!allowed.includes(v)) throw new UsageError(`invalid ${flag} '${v}' (use ${choices})`);
+      value = v;
     },
-    get: () => mode || DEFAULT_MODE,
+    get: () => value,
   };
 }
 
+function recorderFor(flags, token) {
+  return flags.find((f) => token === f.flag || token.startsWith(`${f.flag}=`)) || null;
+}
+
 // Consumes leading flags; returns { index, stop } where stop means `--` was seen.
-function consumeLeading(tokens, mode) {
+function consumeLeading(tokens, flags) {
   let i = 0;
   while (i < tokens.length && tokens[i].value.startsWith('--')) {
     const v = tokens[i].value;
     if (v === '--') return { index: i + 1, stop: true };
-    if (v === '--mode') {
-      mode.set(tokens[i + 1] && tokens[i + 1].value);
+    const rec = recorderFor(flags, v);
+    if (!rec) throw unknownFlag(v);
+    if (v === rec.flag) {
+      rec.set(tokens[i + 1] && tokens[i + 1].value);
       i += 2;
-    } else if (v.startsWith('--mode=')) {
-      mode.set(v.slice('--mode='.length));
-      i += 1;
     } else {
-      throw unknownFlag(v);
+      rec.set(v.slice(rec.flag.length + 1));
+      i += 1;
     }
   }
   return { index: i, stop: false };
 }
 
-// Consumes trailing `--mode <gate|auto|step>` and `--mode=<value>` down to (not
-// below) `floor`; returns the new end index. Any other trailing token, even one
-// that looks like a flag (`add a --dry-run option`), is task text.
-function consumeTrailing(tokens, floor, mode) {
+// Recorder for a trailing `--flag=<value>` token, or null when it is task text.
+function trailingEq(flags, token) {
+  const rec = recorderFor(flags, token);
+  if (!rec || token === rec.flag) return null;
+  const value = token.slice(rec.flag.length + 1);
+  return rec.strictTrailing || rec.allowed.includes(value) ? { rec, value } : null;
+}
+
+// Consumes trailing `--mode <m>` / `--profile <p>` pairs and `--flag=<value>`
+// tokens down to (not below) `floor`; returns the new end index. A pair counts
+// only when its value is valid. Any other trailing token, even one that looks
+// like a flag (`add a --dry-run option`), is task text.
+function consumeTrailing(tokens, floor, flags) {
   let j = tokens.length;
   while (j > floor) {
     const last = tokens[j - 1].value;
     const prev = j - 2 >= floor ? tokens[j - 2].value : null;
-    if (last.startsWith('--mode=')) {
-      mode.set(last.slice('--mode='.length));
+    const eq = trailingEq(flags, last);
+    const pair = flags.find((f) => prev === f.flag && f.allowed.includes(last));
+    if (eq) {
+      eq.rec.set(eq.value);
       j -= 1;
-    } else if (prev === '--mode' && MODES.includes(last)) {
-      mode.set(last);
+    } else if (pair) {
+      pair.set(last);
       j -= 2;
     } else {
       break;
@@ -98,14 +118,17 @@ function stripWrappingQuotes(text) {
 function parseTaskArgs(text) {
   const raw = String(text);
   const tokens = tokenize(raw);
-  const mode = modeRecorder();
-  const lead = consumeLeading(tokens, mode);
-  const end = lead.stop ? tokens.length : consumeTrailing(tokens, lead.index, mode);
+  const mode = flagRecorder('--mode', MODES, true);
+  const profile = flagRecorder('--profile', PROFILES);
+  const flags = [mode, profile];
+  const lead = consumeLeading(tokens, flags);
+  const end = lead.stop ? tokens.length : consumeTrailing(tokens, lead.index, flags);
   const task = lead.index < end
     ? stripWrappingQuotes(raw.slice(tokens[lead.index].start, tokens[end - 1].end).trim())
     : '';
   if (task === '') throw new UsageError('task is required');
-  return { task, mode: mode.get() };
+  // profile stays null when absent: the config files fill it in later.
+  return { task, mode: mode.get() || DEFAULT_MODE, profile: profile.get() };
 }
 
-module.exports = { parseTaskArgs, UsageError, MODES, DEFAULT_MODE };
+module.exports = { parseTaskArgs, UsageError, MODES, DEFAULT_MODE, PROFILES, DEFAULT_PROFILE };

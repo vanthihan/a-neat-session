@@ -111,7 +111,7 @@ function gitBaseline(root) {
   return { baseSha: sha, headSha: sha, dirtyAtStart: dirty, hashes: gitLib.fingerprints(root, dirty) };
 }
 
-function createRun(root, { task, mode }, now = currentTime()) {
+function createRun(root, { task, mode, profile }, now = currentTime()) {
   const baseline = gitBaseline(root);
   fs.mkdirSync(runsDir(root), { recursive: true });
   const id = makeRunId(task, now, listRunIds(root));
@@ -121,6 +121,7 @@ function createRun(root, { task, mode }, now = currentTime()) {
     id,
     task,
     mode,
+    profile: profile || null,
     stage: 'created',
     stages: PIPELINE.map((name) => ({ name, status: 'pending' })),
     workers: [],
@@ -169,15 +170,22 @@ function setStage(state, stage) {
   return { ...state, stage, stages };
 }
 
-// Pure: adds or updates the worker entry `name`.
-function setWorker(state, name, status, report) {
+// Pure: adds or updates the worker entry `name`. Other fields of an existing
+// entry are kept; `extra` (for example { model, effort }) is merged last.
+function setWorker(state, name, status, report, extra = {}) {
   if (typeof name !== 'string' || !WORKER_NAME.test(name)) {
     throw new UsageError(`invalid worker name '${name}' (use explorer|reviewer|tester|implementer-T<n>|docs-D<n>)`);
   }
   assertOneOf('worker status', status, WORKER_STATUSES);
   const workers = Array.isArray(state.workers) ? state.workers : [];
   const existing = workers.find((w) => w.name === name);
-  const entry = { name, status, report: report || (existing && existing.report) || null };
+  const entry = {
+    ...(existing || {}),
+    name,
+    status,
+    report: report || (existing && existing.report) || null,
+    ...extra,
+  };
   const next = existing
     ? workers.map((w) => (w.name === name ? entry : { ...w }))
     : [...workers.map((w) => ({ ...w })), entry];

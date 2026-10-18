@@ -18,12 +18,12 @@ function usage(text, message) {
 }
 
 test('trailing --mode X is parsed', () => {
-  assert.deepEqual(parseTaskArgs('add login --mode auto'), { task: 'add login', mode: 'auto' });
+  assert.deepEqual(parseTaskArgs('add login --mode auto'), { task: 'add login', mode: 'auto', profile: null });
 });
 
 test('leading --mode=X is parsed and one layer of wrapping quotes is stripped', () => {
-  assert.deepEqual(parseTaskArgs('--mode=step "add X"'), { task: 'add X', mode: 'step' });
-  assert.deepEqual(parseTaskArgs("'add Y'"), { task: 'add Y', mode: 'gate' });
+  assert.deepEqual(parseTaskArgs('--mode=step "add X"'), { task: 'add X', mode: 'step', profile: null });
+  assert.deepEqual(parseTaskArgs("'add Y'"), { task: 'add Y', mode: 'gate', profile: null });
 });
 
 test('quotes that do not wrap the whole task are kept', () => {
@@ -34,11 +34,12 @@ test('--mode in the middle of the task is task text, mode defaults to gate', () 
   assert.deepEqual(parseTaskArgs('remove the --mode flag from docs'), {
     task: 'remove the --mode flag from docs',
     mode: 'gate',
+    profile: null,
   });
 });
 
 test('-- ends flag parsing', () => {
-  assert.deepEqual(parseTaskArgs('--mode auto -- --weird task'), { task: '--weird task', mode: 'auto' });
+  assert.deepEqual(parseTaskArgs('--mode auto -- --weird task'), { task: '--weird task', mode: 'auto', profile: null });
 });
 
 test('shell metacharacters survive byte-exact', () => {
@@ -52,7 +53,7 @@ test('inner whitespace and newlines of the task are preserved', () => {
 });
 
 test('unknown leading flags are usage errors that point to --', () => {
-  usage('--verbose fix it', 'unknown flag --verbose (valid: --mode; put -- before a task that starts with a flag)');
+  usage('--verbose fix it', 'unknown flag --verbose (valid: --mode, --profile; put -- before a task that starts with a flag)');
 });
 
 test('trailing words that mention a flag are task text', () => {
@@ -60,9 +61,9 @@ test('trailing words that mention a flag are task text', () => {
     'add a --dry-run option', 'support --json', 'fix the --mode flag', 'make --mode work',
     'fix it --mod auto', 'fix it --verbose', 'fix it --mode fast', 'document --mode',
   ]) {
-    assert.deepEqual(parseTaskArgs(text), { task: text, mode: 'gate' });
+    assert.deepEqual(parseTaskArgs(text), { task: text, mode: 'gate', profile: null });
   }
-  assert.deepEqual(parseTaskArgs('support --json --mode auto'), { task: 'support --json', mode: 'auto' });
+  assert.deepEqual(parseTaskArgs('support --json --mode auto'), { task: 'support --json', mode: 'auto', profile: null });
 });
 
 test('invalid --mode= value is a usage error', () => {
@@ -77,6 +78,29 @@ test('leading --mode without a value is a usage error', () => {
 
 test('duplicate --mode is a usage error', () => {
   usage('--mode auto x --mode step', 'duplicate --mode');
+});
+
+test('leading and trailing --profile set the profile; no flag leaves it null', () => {
+  assert.deepEqual(parseTaskArgs('--profile budget fix it'), { task: 'fix it', mode: 'gate', profile: 'budget' });
+  assert.deepEqual(parseTaskArgs('fix it --profile quality'), { task: 'fix it', mode: 'gate', profile: 'quality' });
+  assert.deepEqual(parseTaskArgs('--profile=inherit fix'), { task: 'fix', mode: 'gate', profile: 'inherit' });
+  assert.deepEqual(parseTaskArgs('fix it'), { task: 'fix it', mode: 'gate', profile: null });
+  assert.deepEqual(parseTaskArgs('--mode auto --profile balanced x'), { task: 'x', mode: 'auto', profile: 'balanced' });
+  assert.deepEqual(parseTaskArgs('fix it --profile adaptive --mode step'), { task: 'fix it', mode: 'step', profile: 'adaptive' });
+  assert.deepEqual(parseTaskArgs('fix it --profile=budget'), { task: 'fix it', mode: 'gate', profile: 'budget' });
+});
+
+test('--profile mentioned in the task or with an invalid trailing value is task text', () => {
+  for (const text of ['add a --profile option', 'fix it --profile wizard', 'fix it --profile=fast', 'document --profile']) {
+    assert.deepEqual(parseTaskArgs(text), { task: text, mode: 'gate', profile: null });
+  }
+});
+
+test('invalid, missing and duplicate leading --profile are usage errors', () => {
+  usage('--profile wizard x', "invalid --profile 'wizard' (use adaptive|quality|balanced|budget|inherit)");
+  usage('--profile=wizard x', "invalid --profile 'wizard' (use adaptive|quality|balanced|budget|inherit)");
+  usage('--profile', '--profile needs a value (use adaptive|quality|balanced|budget|inherit)');
+  usage('--profile budget x --profile quality', 'duplicate --profile');
 });
 
 test('empty task is a usage error', () => {

@@ -323,12 +323,16 @@ test('plan check on a valid plan prints batches and records tasks in state.json'
   assert.deepEqual(Object.keys(state.tasks[0]).sort(), ['batch', 'do', 'id', 'owns', 'title', 'worker']);
 });
 
-test('brief explorer before any plan writes the file, prints only its path and marks the worker running', () => {
+test('brief explorer before any plan writes the file, prints its path and route line and marks the worker running', () => {
   const { id, dir } = newRun('explore first');
   const res = neat(['brief', id, 'explorer']);
   assert.equal(res.status, 0, res.stderr);
   const file = path.join(dir, 'brief-explorer.md');
-  assert.equal(res.stdout, `${file}\n`);
+  const lines = res.stdout.split('\n');
+  assert.equal(lines.length, 3, res.stdout);
+  assert.equal(lines[0], file);
+  assert.ok(lines[1].startsWith('route worker=explorer '), lines[1]);
+  assert.equal(lines[2], '');
   assert.ok(fs.existsSync(file));
   assert.ok(fs.readFileSync(file, 'utf8').includes(`Helper: node ${HELPER}`));
   const w = readState(dir).workers.find((x) => x.name === 'explorer');
@@ -341,7 +345,7 @@ test('brief implementer-T1 after plan check embeds the absolute helper and repor
   assert.equal(neat(['plan', 'check', id]).status, 0);
   const res = neat(['brief', id, 'implementer-T1']);
   assert.equal(res.status, 0, res.stderr);
-  const text = fs.readFileSync(res.stdout.trim(), 'utf8');
+  const text = fs.readFileSync(res.stdout.split('\n')[0], 'utf8');
   assert.ok(text.includes(`Helper: node ${HELPER}`));
   assert.ok(text.includes(`Report: ${dir}/report-implementer-T1.md`));
   assert.ok(text.includes(`- ${dir}/plan.md`));
@@ -376,6 +380,6 @@ test('brief --stdin appends orchestrator notes', () => {
   const { id } = newRun('test it');
   const res = neat(['brief', id, 'tester', '--stdin'], 'test command: npm test\n');
   assert.equal(res.status, 0, res.stderr);
-  const text = fs.readFileSync(res.stdout.trim(), 'utf8');
+  const text = fs.readFileSync(res.stdout.split('\n')[0], 'utf8');
   assert.match(text, /## Orchestrator notes\ntest command: npm test\n$/);
 });

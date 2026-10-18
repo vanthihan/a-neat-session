@@ -8,15 +8,10 @@ const path = require('node:path');
 const runState = require('./run-state.cjs');
 const { REPORT_HEADINGS, MAX_REPORT_WORDS, REPORT_STATUSES } = require('./report-check.cjs');
 const { UsageError } = require('./cli-args.cjs');
+const { roleOf, routeWorker } = require('./route.cjs');
 
 const READ_ONLY_ROLES = Object.freeze(['explorer', 'reviewer', 'tester']);
 const PLAN_WORKER = /^(implementer-T|docs-D)(\d+)$/;
-
-function roleOf(worker) {
-  if (worker.startsWith('implementer-')) return 'implementer';
-  if (worker.startsWith('docs-')) return 'docs';
-  return worker;
-}
 
 function planTask(state, worker) {
   const m = worker.match(PLAN_WORKER);
@@ -136,8 +131,9 @@ function helperPath() {
   return path.resolve(__dirname, '..', 'bin', 'neat.cjs');
 }
 
-// Writes brief-{worker}.md, marks the worker running and returns the absolute path.
-function writeBrief(root, id, worker, notes, now) {
+// Writes brief-{worker}.md, marks the worker running with its routed model and
+// effort, and returns { file, route } (file is the absolute brief path).
+function writeBrief(root, id, worker, notes, now, env = process.env) {
   if (typeof worker !== 'string' || !runState.WORKER_NAME.test(worker)) {
     throw new UsageError(`invalid worker name '${worker}' (use explorer|reviewer|tester|implementer-T<n>|docs-D<n>)`);
   }
@@ -146,8 +142,10 @@ function writeBrief(root, id, worker, notes, now) {
   const text = buildBrief(state, worker, { runDir, helperPath: helperPath(), notes });
   const file = runState.writeRunFile(root, id, `brief-${worker}.md`, text);
   const report = path.join(runDir, `report-${worker}.md`);
-  runState.saveRun(root, runState.setWorker(state, worker, 'running', report), now);
-  return file;
+  const route = routeWorker(root, state, worker, env, now);
+  const extra = { model: route.model, effort: route.effort };
+  runState.saveRun(root, runState.setWorker(state, worker, 'running', report, extra), now);
+  return { file, route };
 }
 
 module.exports = { buildBrief, writeBrief };

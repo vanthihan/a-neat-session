@@ -122,7 +122,7 @@ function briefLine(file, key) {
 // Brief -> (stand-in work) -> report via `write` -> report check -> worker done.
 function runWorker(project, id, worker, { notes, work, reportText } = {}) {
   const args = notes ? ['brief', id, worker, '--stdin'] : ['brief', id, worker];
-  const briefPath = ok(project, args, notes).trim();
+  const briefPath = ok(project, args, notes).split('\n')[0];
   assert.ok(path.isAbsolute(briefPath), briefPath);
   assert.ok(fs.readFileSync(briefPath, 'utf8').startsWith(`# Brief: ${worker}`));
   if (work) work(briefPath);

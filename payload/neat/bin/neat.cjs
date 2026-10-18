@@ -12,11 +12,12 @@ const { formatStatus } = require(path.join(LIB, 'status.cjs'));
 const planCheck = require(path.join(LIB, 'plan-check.cjs'));
 const brief = require(path.join(LIB, 'brief.cjs'));
 const gitOps = require(path.join(LIB, 'git-ops.cjs'));
+const route = require(path.join(LIB, 'route.cjs'));
 
 const MAX_ERROR_LINES = 5;
 
 const HELP = [
-  'neat run new [--stdin] [--mode gate|auto|step] [task]',
+  'neat run new [--stdin] [--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [task]',
   'neat run stage <run-id> <explore|plan|implement|review|test|docs|done|cancelled>',
   'neat run worker <run-id> <name> <running|done|failed|report-invalid>',
   'neat run guard <run-id> [--tasks T1,T2]',
@@ -51,9 +52,9 @@ function cmdRunNew(args) {
   const words = useStdin ? args.slice(1) : args;
   if (useStdin && words.length > 0) throw new UsageError('run new --stdin takes no task words');
   const text = useStdin ? readStdin() : words.join(' ');
-  const { task, mode } = parseTaskArgs(text);
+  const { task, mode, profile } = parseTaskArgs(text);
   const root = runState.projectRoot(process.env, process.cwd());
-  const state = runState.createRun(root, { task, mode }, runState.currentTime(process.env));
+  const state = runState.createRun(root, { task, mode, profile }, runState.currentTime(process.env));
   out(`id=${state.id} mode=${state.mode} dir=${runState.runDir(root, state.id)}`);
   gitOps.startLines(root, state).forEach((line) => out(line));
   return 0;
@@ -161,7 +162,9 @@ function cmdBrief(args) {
   if (!ok) throw new UsageError('usage: neat brief <run-id> <worker> [--stdin]');
   const notes = flag === '--stdin' ? readStdin() : '';
   const root = runState.projectRoot(process.env, process.cwd());
-  out(brief.writeBrief(root, id, worker, notes, runState.currentTime(process.env)));
+  const result = brief.writeBrief(root, id, worker, notes, runState.currentTime(process.env), process.env);
+  out(result.file);
+  out(route.formatRoute(result.route));
   return 0;
 }
 
