@@ -6,6 +6,7 @@ const readline = require('node:readline/promises');
 const { parseInstallerArgs, chooseScope, USAGE, InstallerUsageError } = require('../lib/installer/args.cjs');
 const { resolveTarget, helperPath, assertShellSafePath } = require('../lib/installer/paths.cjs');
 const { install } = require('../lib/installer/install.cjs');
+const { uninstall } = require('../lib/installer/uninstall.cjs');
 
 const PAYLOAD_DIR = path.join(__dirname, '..', 'payload');
 const RESTART_LINE =
@@ -13,6 +14,10 @@ const RESTART_LINE =
 
 function out(line) {
   process.stdout.write(`${line}\n`);
+}
+
+function warnAll(warnings) {
+  for (const w of warnings) process.stderr.write(`a-neat-session: warning: ${w}\n`);
 }
 
 async function askOnTerminal(question) {
@@ -44,7 +49,15 @@ async function main(argv) {
   const target = resolveTarget(scope);
   assertShellSafePath(helperPath(target));
   out(`a-neat-session: target ${target}`);
+  if (opts.uninstall) {
+    const result = uninstall({ target });
+    warnAll(result.warnings);
+    for (const note of result.notes) out(`a-neat-session: ${note}`);
+    out(`a-neat-session: removed ${result.removed.length} files, kept ${result.kept.length} modified files`);
+    return 0;
+  }
   const result = install({ scope, target, payloadDir: PAYLOAD_DIR, force: opts.force });
+  warnAll(result.warnings);
   out(`a-neat-session: installed ${result.files.length} files into ${target}`);
   out(RESTART_LINE);
   return 0;
