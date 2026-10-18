@@ -37,6 +37,23 @@ function hookRoot(input, env = process.env) {
   return null;
 }
 
+function realPath(file) {
+  try {
+    return fs.realpathSync(file);
+  } catch {
+    return path.resolve(file);
+  }
+}
+
+// True when the project has its own (local) install and `helper` is not that
+// install's helper: the local install's hooks answer, so this one stays
+// silent instead of acting twice.
+function yieldsToLocal(root, helper) {
+  const localDir = path.join(root, '.claude', 'neat');
+  if (!fs.existsSync(path.join(localDir, 'manifest.json'))) return false;
+  return realPath(helper) !== realPath(path.join(localDir, 'bin', 'neat.cjs'));
+}
+
 function parseInput(text) {
   const data = JSON.parse(text);
   if (data === null || typeof data !== 'object' || Array.isArray(data)) throw new Error('hook input is not an object');
@@ -49,7 +66,9 @@ function hookOutput(name, { stdinFd, env }) {
     const handler = handlerFor(name);
     if (!handler) return '';
     const input = parseInput(fs.readFileSync(stdinFd, 'utf8'));
-    const out = handler(input, env, { root: hookRoot(input, env), helper: HELPER });
+    const root = hookRoot(input, env);
+    if (root && yieldsToLocal(root, HELPER)) return '';
+    const out = handler(input, env, { root, helper: HELPER });
     return typeof out === 'string' && out.length <= MAX_RAW_OUTPUT ? out : '';
   } catch {
     return '';
@@ -71,4 +90,4 @@ function main(name, { stdinFd = 0, env = process.env, write = defaultWrite } = {
   process.exitCode = 0;
 }
 
-module.exports = { main, hookRoot, MAX_HOOK_OUTPUT };
+module.exports = { main, hookRoot, yieldsToLocal, MAX_HOOK_OUTPUT };

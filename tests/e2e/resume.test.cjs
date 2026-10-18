@@ -292,3 +292,60 @@ describe('run resume and procedure through the installed helper', () => {
     assert.ok(res.stderr.includes(`procedure not found: ${path.join(copy, 'commands', 'neat', 'do.md')}`), res.stderr);
   });
 });
+
+describe('which install answers the hook', () => {
+  let tmp;
+  let local;
+  let plain;
+  const REPO_HELPER = path.join(REPO_ROOT, 'payload', 'neat', 'bin', 'neat.cjs');
+
+  const hookVia = (helperFile, projectDir, input = COMPACT) =>
+    runHookCommand(`node ${helperFile} hook session-start`, { projectDir, input });
+  const startRun = (projectDir, helperFile) => {
+    const env = childEnv({ NEAT_PROJECT_DIR: projectDir, NEAT_NOW: NOW });
+    const res = runNode([helperFile, 'run', 'new', 'hook owner'], { cwd: projectDir, env });
+    assert.equal(res.status, 0, res.stderr);
+    const id = /^id=(\S+)/.exec(res.stdout)[1];
+    assert.equal(runNode([helperFile, 'run', 'stage', id, 'explore'], { cwd: projectDir, env }).status, 0);
+    return id;
+  };
+
+  before(() => {
+    tmp = makeTempDir('neat-resume-owner-');
+    local = path.join(tmp, 'local');
+    plain = path.join(tmp, 'plain');
+    fs.mkdirSync(local);
+    fs.mkdirSync(plain);
+    const res = runNode([INSTALLER, '--local'], { cwd: local, env: childEnv({ NEAT_PROJECT_DIR: local }) });
+    assert.equal(res.status, 0, res.stderr);
+  });
+
+  after(() => removeDir(tmp));
+
+  test('a local install wins: another helper stays silent in that project', () => {
+    const installed = path.join(local, '.claude', 'neat', 'bin', 'neat.cjs');
+    const id = startRun(local, installed);
+    const other = hookVia(REPO_HELPER, local);
+    assert.equal(other.status, 0, other.stderr);
+    assert.equal(other.stdout, '');
+    const own = hookVia(installed, local);
+    assert.equal(own.status, 0, own.stderr);
+    assert.ok(JSON.parse(own.stdout).hookSpecificOutput.additionalContext.includes(id));
+  });
+
+  test('without a local install the other helper injects', () => {
+    const id = startRun(plain, REPO_HELPER);
+    const res = hookVia(REPO_HELPER, plain);
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(JSON.parse(res.stdout).hookSpecificOutput.additionalContext.includes(`neat run ${id} is active`));
+  });
+
+  test('after /clear the hook prints a one-line pointer to the newest unfinished run', () => {
+    const installed = path.join(local, '.claude', 'neat', 'bin', 'neat.cjs');
+    const clear = JSON.stringify({ hook_event_name: 'SessionStart', source: 'clear', session_id: 'sess-new' });
+    const res = hookVia(installed, local, clear);
+    assert.equal(res.status, 0, res.stderr);
+    const ctx = JSON.parse(res.stdout).hookSpecificOutput.additionalContext;
+    assert.match(ctx, /^neat run \S+ is unfinished \(stage=explore\): run \/neat:resume \S+ to continue it\.$/);
+  });
+});
