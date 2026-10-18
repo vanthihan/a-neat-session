@@ -19,6 +19,7 @@ const HELPER = path.resolve(__dirname, '..', 'bin', 'neat.cjs');
 // Hook name -> [module, export]; a module is loaded only when its hook runs.
 const HANDLERS = Object.freeze({
   'session-start': ['hook-session-start.cjs', 'sessionStart'],
+  'subagent-stop': ['hook-subagent-stop.cjs', 'subagentStop'],
 });
 
 function handlerFor(name) {

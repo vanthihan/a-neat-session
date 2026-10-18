@@ -184,7 +184,8 @@ describe('SessionStart entry over existing local settings', () => {
     assert.equal(runNode([INSTALLER, '--local'], { cwd: proj, env }).status, 0);
     const helper = path.join(proj, '.claude', 'neat', 'bin', 'neat.cjs');
     const merged = readJson(settingsFile);
-    assert.deepEqual(merged.hooks, { Stop: user.hooks.Stop, SessionStart: [hookEntryFor(helper)] });
+    assert.deepEqual(merged.hooks.Stop, user.hooks.Stop);
+    assert.deepEqual(merged.hooks.SessionStart, [hookEntryFor(helper)]);
     const res = runNode([INSTALLER, '--uninstall', '--local'], { cwd: proj, env });
     assert.equal(res.status, 0, res.stderr);
     assert.deepEqual(readJson(settingsFile), user);

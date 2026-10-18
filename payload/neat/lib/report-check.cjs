@@ -117,16 +117,21 @@ function artifactErrors(text, reportDir) {
     .map((candidates) => `artifact not found: ${candidates[0]}`);
 }
 
+// checkReport plus the Artifacts check, for report text that is not in a
+// file (relative artifact paths resolve against reportDir).
+function checkReportText(text, reportDir) {
+  const base = checkReport(text);
+  const errors = [...base.errors, ...artifactErrors(String(text), reportDir)];
+  return { ok: errors.length === 0, errors, words: base.words };
+}
+
 function checkReportFile(file) {
   const resolved = path.resolve(file);
   if (!isInsideRunDir(resolved)) return failure(`path outside .neat/runs: ${resolved}`);
   if (!fs.existsSync(resolved)) return failure(`report not found: ${resolved}`);
   const real = fs.realpathSync(resolved);
   if (!isInsideRunDir(real)) return failure(`path outside .neat/runs: ${real}`);
-  const text = fs.readFileSync(real, 'utf8');
-  const base = checkReport(text);
-  const errors = [...base.errors, ...artifactErrors(text, path.dirname(resolved))];
-  return { ok: errors.length === 0, errors, words: base.words };
+  return checkReportText(fs.readFileSync(real, 'utf8'), path.dirname(resolved));
 }
 
 module.exports = {
@@ -135,5 +140,6 @@ module.exports = {
   REPORT_STATUSES,
   countWords,
   checkReport,
+  checkReportText,
   checkReportFile,
 };

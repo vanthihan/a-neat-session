@@ -251,6 +251,8 @@ describe('installer settings integration', () => {
     m.settings.added = m.settings.added.map((a) => (a.path[1] === 'SessionStart' ? { ...a, value: older } : a));
     fs.writeFileSync(manifestPath, JSON.stringify(m, null, 2));
   }
+  // The manifest keeps re-added entries after the kept ones; order is not meaningful.
+  const sortedByJson = (list) => [...list].sort((x, y) => JSON.stringify(x).localeCompare(JSON.stringify(y)));
   const USER_SESSION_START = [{ matcher: 'startup', hooks: [{ type: 'command', command: 'echo mine' }] }];
 
   test('reinstall replaces entries an older install recorded and no longer adds', () => {
@@ -267,11 +269,11 @@ describe('installer settings integration', () => {
     assert.deepEqual(merged.hooks.SessionStart, [...USER_SESSION_START, sessionStartFor(cfg)]);
     assert.deepEqual(merged.hooks.Stop, USER_SETTINGS.hooks.Stop);
     assert.deepEqual(merged.permissions.allow, ['Bash(ls *)', ruleFor(cfg)]);
-    assert.deepEqual(readJson(manifestPath).settings.added, [
+    assert.deepEqual(sortedByJson(readJson(manifestPath).settings.added), sortedByJson([
       { path: ALLOW, value: ruleFor(cfg) },
       { path: ['hooks', 'SessionStart'], value: sessionStartFor(cfg) },
       { path: ['hooks', 'SubagentStop'], value: subagentStopFor(cfg) },
-    ]);
+    ]));
 
     const afterReconcile = fs.readFileSync(settings, 'utf8');
     assert.equal(runGlobal([]).status, 0);
@@ -292,8 +294,8 @@ describe('installer settings integration', () => {
     assert.equal(res.status, 0, res.stderr);
     assert.deepEqual(readJson(settings).hooks.SessionStart, [...USER_SESSION_START, sessionStartFor(cfg)]);
     assert.deepEqual(
-      readJson(manifestPath).settings.added.map((a) => a.value),
-      [ruleFor(cfg), sessionStartFor(cfg), subagentStopFor(cfg)],
+      sortedByJson(readJson(manifestPath).settings.added.map((a) => a.value)),
+      sortedByJson([ruleFor(cfg), sessionStartFor(cfg), subagentStopFor(cfg)]),
     );
   });
 
