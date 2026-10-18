@@ -12,6 +12,10 @@ const PAYLOAD_DIR = path.join(__dirname, '..', 'payload');
 const RESTART_LINE =
   'Restart Claude Code (or start a new session) to load /neat:do, /neat:status and the neat-* agents.';
 
+const GLOBAL_AGENT_WARNING =
+  '--orchestrator-default with --global makes every Claude Code session in every project ' +
+  'start as the neat orchestrator; --local limits it to this project';
+
 function out(line) {
   process.stdout.write(`${line}\n`);
 }
@@ -56,9 +60,17 @@ async function main(argv) {
     out(`a-neat-session: removed ${result.removed.length} files, kept ${result.kept.length} modified files`);
     return 0;
   }
-  const result = install({ scope, target, payloadDir: PAYLOAD_DIR, force: opts.force });
+  const result = install({
+    scope,
+    target,
+    payloadDir: PAYLOAD_DIR,
+    force: opts.force,
+    orchestratorDefault: opts.orchestratorDefault,
+  });
+  if (opts.orchestratorDefault && scope === 'global') warnAll([GLOBAL_AGENT_WARNING]);
   warnAll(result.warnings);
   out(`a-neat-session: installed ${result.files.length} files into ${target}`);
+  for (const note of result.notes) out(`a-neat-session: ${note}`);
   if (result.skipped.length > 0) {
     process.stderr.write(
       `a-neat-session: incomplete install: skipped ${result.skipped.length} files (see warnings); ` +

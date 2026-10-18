@@ -22,6 +22,7 @@ describe('parseInstallerArgs', () => {
       scope: 'global',
       uninstall: false,
       force: false,
+      orchestratorDefault: false,
       help: false,
     });
   });
@@ -31,6 +32,7 @@ describe('parseInstallerArgs', () => {
       scope: 'local',
       uninstall: true,
       force: true,
+      orchestratorDefault: false,
       help: false,
     });
   });
@@ -53,7 +55,7 @@ describe('parseInstallerArgs', () => {
   });
 
   test('USAGE lists every flag', () => {
-    for (const flag of ['--global', '--local', '--uninstall', '--force', '--help']) {
+    for (const flag of ['--global', '--local', '--uninstall', '--force', '--orchestrator-default', '--help']) {
       assert.ok(USAGE.includes(flag), flag);
     }
   });
