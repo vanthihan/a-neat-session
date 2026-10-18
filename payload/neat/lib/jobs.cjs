@@ -14,6 +14,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { UsageError } = require('./cli-args.cjs');
 const runState = require('./run-state.cjs');
 const { SANDBOXES } = require('./codex.cjs');
@@ -25,6 +26,7 @@ const ID_HEX_BYTES = 2;
 const ID_SUFFIX = /^[0-9a-f]+$/;
 const MODES = Object.freeze(['bg', 'tmux']);
 const TMUX_WINDOW_ID = /^@\d+$/;
+const PS_TIMEOUT_MS = 5000;
 
 function assertJobId(id) {
   if (typeof id !== 'string' || !JOB_ID.test(id)) throw new UsageError(`invalid job id: ${id}`);
@@ -184,15 +186,31 @@ function isWrapperArgv(argv, record) {
   return argv.some((a, i) => a === '_exec' && argv[i + 1] === record.runId && argv[i + 2] === record.id);
 }
 
-// kill -0 on the recorded pid (EPERM still means the process exists). Where
-// /proc exists, /proc/<pid>/cmdline must also be the job's wrapper command
-// line, so a reused pid, a zombie or another process that merely mentions the
-// job id never reads as the job. Only liveness is checked: a terminal status
-// in the record wins over it (see isTerminal).
-function isAlive(record, { procDir = '/proc' } = {}) {
+// The command line of `pid` split on blanks, from `ps` (systems without
+// /proc, such as macOS): [] when ps lists no such process, null when ps
+// cannot run.
+function psArgv(pid, psBin) {
+  const res = spawnSync(psBin, ['-ww', '-o', 'args=', '-p', String(pid)], {
+    encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: PS_TIMEOUT_MS,
+  });
+  if (res.error) return null;
+  return res.status === 0 ? res.stdout.trim().split(/\s+/) : [];
+}
+
+// kill -0 on the recorded pid (EPERM still means the process exists), and the
+// process must also have the job's wrapper command line: from
+// /proc/<pid>/cmdline, or from `ps` where /proc is missing. So a reused pid,
+// a zombie or another process that merely mentions the job id never reads as
+// the job. Only when neither /proc nor ps is available does kill -0 decide
+// alone. Only liveness is checked: a terminal status in the record wins over
+// it (see isTerminal).
+function isAlive(record, { procDir = '/proc', ps = 'ps' } = {}) {
   if (!record || !Number.isInteger(record.pid) || record.pid <= 1) return false;
   if (!pidExists(record.pid)) return false;
-  if (!fs.existsSync(procDir)) return true;
+  if (!fs.existsSync(procDir)) {
+    const argv = psArgv(record.pid, ps);
+    return argv === null ? true : isWrapperArgv(argv, record);
+  }
   try {
     const argv = fs.readFileSync(path.join(procDir, String(record.pid), 'cmdline'), 'utf8').split('\0');
     return isWrapperArgv(argv, record);

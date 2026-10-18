@@ -16,6 +16,7 @@ const codexResult = require(path.join(LIB, 'codex-result.cjs'));
 const { countWords, checkReport } = require(path.join(LIB, 'report-check.cjs'));
 const { UsageError } = require(path.join(LIB, 'cli-args.cjs'));
 
+const HAS_PS = !spawnSync('ps', ['-o', 'pid=', '-p', String(process.pid)]).error;
 const RUN_A = '20260501-120000-alpha';
 const RUN_B = '20260501-120000-beta';
 
@@ -153,7 +154,22 @@ describe('isAlive', () => {
   test('a live pid whose cmdline lacks the job id is not alive (pid reuse guard)', () => {
     const r = record(RUN_A, 'reviewer-zzzz', { pid: process.pid });
     if (fs.existsSync('/proc/self/cmdline')) assert.equal(jobs.isAlive(r), false);
-    assert.equal(jobs.isAlive(r, { procDir: path.join(root, 'no-proc') }), true, 'without /proc only kill -0 decides');
+    const noProc = path.join(root, 'no-proc');
+    if (HAS_PS) assert.equal(jobs.isAlive(r, { procDir: noProc }), false, 'without /proc, ps decides');
+    const noPs = { procDir: noProc, ps: path.join(root, 'no-ps') };
+    assert.equal(jobs.isAlive(r, noPs), true, 'without /proc and ps only kill -0 decides');
+  });
+
+  test('without /proc a wrapper still reads alive through ps, and a dead one does not', { skip: !HAS_PS && 'no ps' }, async () => {
+    const noProc = { procDir: path.join(root, 'no-proc') };
+    const args = ['-e', 'setTimeout(() => {}, 20000)', 'codex', '_exec', RUN_A, 'reviewer-33ee'];
+    child = spawn(process.execPath, args, { stdio: 'ignore' });
+    await new Promise((resolve) => child.once('spawn', resolve));
+    assert.equal(jobs.isAlive(record(RUN_A, 'reviewer-33ee', { pid: child.pid }), noProc), true);
+    assert.equal(jobs.isAlive(record(RUN_A, 'reviewer-44ee', { pid: child.pid }), noProc), false, 'another job');
+    child.kill('SIGKILL');
+    await new Promise((resolve) => child.once('exit', resolve));
+    assert.equal(jobs.isAlive(record(RUN_A, 'reviewer-33ee', { pid: exitedPid() }), noProc), false);
   });
 
   test('a live pid whose cmdline is the job wrapper is alive', async () => {
