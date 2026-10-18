@@ -1,6 +1,6 @@
 ---
-description: Run a task through neat workers (explore, plan, implement, review, test, docs) so this window only receives short reports.
-argument-hint: "[--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [--] TASK"
+description: Run a task through neat workers (explore, research, plan, implement, review, test, docs) so this window only receives short reports.
+argument-hint: "[--mode gate|auto|step] [--profile adaptive|quality|balanced|budget|inherit] [--research] [--] TASK"
 allowed-tools: Bash(node {{NEAT_BIN}} *), Agent, AskUserQuestion, SendMessage
 disable-model-invocation: true
 ---
@@ -20,7 +20,7 @@ You are the neat orchestrator for this run. Follow the sections below in order.
 ## Worker loop
 Every stage runs this routine for a worker list W and guard arguments G:
 1. Brief: for each worker w run `node {{NEAT_BIN}} brief {id} {w}`; it prints the brief path, then a line `route worker={w} model={m} effort={e} ...`. Keep both. Only when a stage supplies notes, add `--stdin` and pass the notes in a `<<'NEAT_EOF'` heredoc ending with `NEAT_EOF`.
-2. Launch: start all workers of W in ONE message with the Agent tool. subagent_type is `neat-implementer` for `implementer-T*`, `neat-docs` for `docs-D*`, and `neat-explorer`, `neat-reviewer` or `neat-tester` for the others (`neat-{w}`). The prompt is exactly `Brief: ` followed by that worker's brief path. Pass only subagent_type, a short description, that prompt, and `model` and `effort` copied from that worker's route line; omit `model` when it is `inherit` and `effort` when it is `none`. If the Agent tool rejects `effort`, launch again without it.
+2. Launch: start all workers of W in ONE message with the Agent tool. subagent_type is `neat-implementer` for `implementer-T*`, `neat-docs` for `docs-D*`, and `neat-explorer`, `neat-researcher`, `neat-reviewer` or `neat-tester` for the others (`neat-{w}`). The prompt is exactly `Brief: ` followed by that worker's brief path. Pass only subagent_type, a short description, that prompt, and `model` and `effort` copied from that worker's route line; omit `model` when it is `inherit` and `effort` when it is `none`. If the Agent tool rejects `effort`, launch again without it.
 3. Wait: end your turn with `Waiting for: {W}`. Continue only after every launched worker's completion notification has arrived. If the Agent tool returned the results directly, continue at once. Never poll, sleep or read transcripts.
 4. Check: for each w run `node {{NEAT_BIN}} report check {dir}/report-{w}.md`. On exit 1, send the printed error lines once with SendMessage to that worker asking for a corrected report, end your turn, then check again. A second failure: `run worker {id} {w} report-invalid`. Otherwise run `run worker {id} {w} done`, or `run worker {id} {w} failed` when its Status says failed.
 5. Guard: run `node {{NEAT_BIN}} run guard {id} {G}`. On exit 1: in auto mode run `run stage {id} cancelled` and go to Finish showing the violation lines; in gate and step mode ask with AskUserQuestion, showing the violation lines, with options Continue / Stop (Stop: `run stage {id} cancelled`, go to Finish).
@@ -43,8 +43,21 @@ Run `node {{NEAT_BIN}} run stage {id} explore`, then the Worker loop with W = `e
 ## Classify
 From the explorer report rate the task: `trivial` (one small, obvious change), `risky` (security, data loss, concurrency, public interfaces or many files) or `normal`. Run `node {{NEAT_BIN}} run classify {id} {complexity}`; later briefs route from it. Then pick the task type: `small-fix`, `feature`, `refactor`, `research` (a question, no edits) or `docs`. Run `node {{NEAT_BIN}} stages {id} --type {type}` and keep the printed `stages ...` line.
 
+## Research
+gate and step: when the `stages` line says `propose=yes` and the explorer report lists `research: ...` open questions, ask with AskUserQuestion whether to research them first, with options Research / Skip. On Research run `node {{NEAT_BIN}} stages {id} --type {type} --research` and keep the new `stages ...` line. auto never asks.
+
+Run `node {{NEAT_BIN}} run stage {id} research`, then pass the questions (or the task's open points) as notes:
+
+```
+node {{NEAT_BIN}} brief {id} researcher --stdin <<'NEAT_EOF'
+{questions}
+NEAT_EOF
+```
+
+Then run the Worker loop with W = `researcher` and no G, skipping its Brief step. Use its findings and notes path in the plan and in Finish.
+
 ## Plan
-Run `node {{NEAT_BIN}} run stage {id} plan`. Using only the task text and the explorer report, write the plan, starting with the `stages ...` line:
+Run `node {{NEAT_BIN}} run stage {id} plan`. Using only the task text and the explorer and researcher reports, write the plan, starting with the `stages ...` line:
 
 ```
 node {{NEAT_BIN}} write {id} plan.md --stdin <<'NEAT_EOF'

@@ -128,8 +128,8 @@ function runWorker(project, id, worker, { notes, work, reportText, route } = {})
   assert.ok(fs.readFileSync(briefPath, 'utf8').startsWith(`# Brief: ${worker}`));
   if (work) work(briefPath);
   const reportPath = briefLine(briefPath, 'Report');
-  if (worker.startsWith('docs-')) {
-    fs.writeFileSync(reportPath, reportText || report()); // docs saves with the Write tool
+  if (worker.startsWith('docs-') || worker === 'researcher') {
+    fs.writeFileSync(reportPath, reportText || report()); // docs and researcher save with the Write tool
   } else {
     const out = ok(project, ['write', id, `report-${worker}.md`, '--stdin'], reportText || report());
     assert.match(out, /report ok/);
@@ -373,5 +373,65 @@ describe('gate mode small fix: only explore, plan, implement and test run', () =
     const statuses = stageStatuses(run);
     for (const name of ['research', 'review', 'docs']) assert.equal(statuses[name], 'skipped', name);
     for (const name of ['explore', 'plan', 'implement', 'test']) assert.equal(statuses[name], 'done', name);
+  });
+});
+
+describe('gate mode research question: only explore and research run', () => {
+  test('the researcher leaves notes in the run dir, later stages are skipped and nothing is committed', () => {
+    const project = makeProject();
+    const out = ok(project, ['run', 'new', '--stdin'], '--research how does the retry work\n');
+    const m = /^id=(\S+) mode=gate dir=(.+)$/m.exec(out);
+    assert.ok(m, out);
+    const run = { id: m[1], dir: m[2] };
+    explore(project, run.id);
+    assert.equal(ok(project, ['run', 'classify', run.id, 'normal']), 'complexity normal\n');
+    assert.equal(ok(project, ['stages', run.id, '--type', 'research']),
+      'stages explore,research type=research propose=no\n');
+
+    assert.equal(ok(project, ['run', 'stage', run.id, 'research']), 'stage research\n');
+    const notesFile = path.join(run.dir, 'research-notes.md');
+    runWorker(project, run.id, 'researcher', {
+      notes: 'research: how does the retry work?\n',
+      route: /^route worker=researcher model=sonnet effort=medium /,
+      work: (briefPath) => {
+        const brief = fs.readFileSync(briefPath, 'utf8');
+        assert.ok(brief.includes('research: how does the retry work?'));
+        assert.equal(briefLine(briefPath, 'Notes'), notesFile);
+        fs.writeFileSync(notesFile, 'https://example.invalid/retry - retries use exponential backoff\n');
+      },
+      reportText: report({
+        findings: '- https://example.invalid/retry - retries use exponential backoff',
+        artifacts: '- research-notes.md',
+      }),
+    });
+    const researchGuard = guard(project, run.id);
+    assert.equal(researchGuard.status, 0, researchGuard.stdout);
+
+    assert.equal(ok(project, ['run', 'stage', run.id, 'plan']), 'stage plan skipped\n');
+    for (const stage of ['implement', 'review', 'test', 'docs']) {
+      assert.equal(ok(project, ['run', 'stage', run.id, stage]), `stage ${stage} skipped\n`);
+    }
+    assert.equal(ok(project, ['run', 'commit', run.id]), 'commit skip: no owned changes\n');
+    ok(project, ['run', 'stage', run.id, 'done']);
+
+    assert.deepEqual(newCommits(project), []);
+    assert.ok(fs.existsSync(notesFile));
+    assertFinished(project, run, 2);
+    const reports = fs.readdirSync(run.dir).filter((f) => /^report-.*\.md$/.test(f)).sort();
+    assert.deepEqual(reports, ['report-explorer.md', 'report-researcher.md']);
+    const statuses = stageStatuses(run);
+    for (const name of ['explore', 'research']) assert.equal(statuses[name], 'done', name);
+    for (const name of ['plan', 'implement', 'review', 'test', 'docs']) assert.equal(statuses[name], 'skipped', name);
+  });
+
+  test('gate proposes research for a feature; accepting with --research selects it', () => {
+    const project = makeProject();
+    const run = startRun(project, 'gate');
+    assert.equal(ok(project, ['stages', run.id, '--type', 'feature']),
+      'stages explore,plan,implement,review,test,docs type=feature propose=yes\n');
+    assert.equal(stageStatuses(run).research, 'skipped');
+    assert.equal(ok(project, ['stages', run.id, '--type', 'feature', '--research']),
+      'stages explore,research,plan,implement,review,test,docs type=feature propose=no\n');
+    assert.equal(stageStatuses(run).research, 'pending');
   });
 });

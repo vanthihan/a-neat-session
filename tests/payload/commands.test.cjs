@@ -15,12 +15,12 @@ const HELPER = path.join(REPO_ROOT, 'payload', 'neat', 'bin', 'neat.cjs');
 const MAX_DESCRIPTION = 200;
 const MAX_BODY_WORDS = 1500;
 const DO_SECTIONS = [
-  '## Rules', '## Worker loop', '## Start', '## Explore', '## Classify', '## Plan', '## Approve',
+  '## Rules', '## Worker loop', '## Start', '## Explore', '## Classify', '## Research', '## Plan', '## Approve',
   '## Implement', '## Review', '## Test', '## Docs', '## Commit', '## Finish',
 ];
 const DO_MENTIONS = [
-  'neat-explorer', 'neat-implementer', 'neat-reviewer', 'neat-tester', 'neat-docs',
-  'Brief: ', 'subagent_type', 'AskUserQuestion', 'SendMessage', 'untrusted',
+  'neat-explorer', 'neat-researcher', 'neat-implementer', 'neat-reviewer', 'neat-tester', 'neat-docs',
+  'propose=yes', '--research', 'Brief: ', 'subagent_type', 'AskUserQuestion', 'SendMessage', 'untrusted',
   'run commit', 'plan check', 'run guard', 'run classify', 'gate', 'auto', 'step',
   'must not contain a line NEAT_EOF', 'skipped',
 ];
@@ -111,7 +111,7 @@ describe('do.md', () => {
     assert.deepEqual(lines.filter((l) => l.startsWith('!') && l.includes('$ARGUMENTS')), []);
   });
 
-  test('H2 sections are exactly the thirteen sections, in order', () => {
+  test('H2 sections are exactly the fourteen sections, in order', () => {
     assert.deepEqual(lines.filter((l) => l.startsWith('## ')), DO_SECTIONS);
   });
 
