@@ -160,3 +160,20 @@ test('without a capture the reviewer stays on opus with usage unknown and no std
     removeDir(cfg);
   }
 });
+
+test('installed usage-capture passes the status line through and feeds the next brief', () => {
+  const { cfg, runEnv } = usageEnv();
+  try {
+    const input = statuslineJson(80);
+    const res = runNode([helper, 'usage-capture'], { cwd: proj, env: runEnv, input });
+    assert.equal(res.status, 0);
+    assert.equal(res.stderr, '');
+    assert.equal(res.stdout, input);
+    const { id } = newRun('captured usage\n', runEnv);
+    const line = briefRoute(id, 'reviewer', runEnv);
+    assert.match(line, / model=sonnet /);
+    assert.match(line, / stepdown=yes /);
+  } finally {
+    removeDir(cfg);
+  }
+});

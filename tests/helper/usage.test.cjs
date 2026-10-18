@@ -8,9 +8,11 @@ const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { REPO_ROOT, makeTempDir, removeDir } = require('../support/helpers.cjs');
+const { spawnSync } = require('node:child_process');
+const { REPO_ROOT, childEnv, makeTempDir, removeDir } = require('../support/helpers.cjs');
 
 const usage = require(path.join(REPO_ROOT, 'payload', 'neat', 'lib', 'usage.cjs'));
+const HELPER = path.join(REPO_ROOT, 'payload', 'neat', 'bin', 'neat.cjs');
 
 const NOW = new Date('2026-05-01T12:00:00Z');
 const NOW_SEC = Math.floor(NOW.getTime() / 1000);
@@ -141,5 +143,208 @@ describe('formatPercent', () => {
     assert.equal(usage.formatPercent(0), '0%');
     assert.equal(usage.formatPercent(null), 'unknown');
     assert.equal(usage.formatPercent(Number.NaN), 'unknown');
+  });
+});
+
+function mode(p) {
+  return fs.statSync(p).mode & 0o777;
+}
+
+function tmpSiblings(file) {
+  const base = `${path.basename(file)}.tmp-`;
+  return fs.readdirSync(path.dirname(file)).filter((n) => n.startsWith(base));
+}
+
+describe('writeCapture and cleanupTmp', () => {
+  let dir;
+
+  before(() => {
+    dir = makeTempDir('neat-usage-write-');
+  });
+
+  after(() => removeDir(dir));
+
+  test('creates a 0700 directory and a 0600 file atomically, no tmp left', () => {
+    const file = path.join(dir, 'a', 'neat', 'usage.json');
+    const bytes = Buffer.from('{"x":1}');
+    usage.writeCapture(file, bytes);
+    assert.deepEqual(fs.readFileSync(file), bytes);
+    assert.equal(mode(file), 0o600);
+    assert.equal(mode(path.dirname(file)), 0o700);
+    assert.deepEqual(tmpSiblings(file), []);
+  });
+
+  test('keeps the mode of an existing directory', () => {
+    const sub = path.join(dir, 'existing');
+    fs.mkdirSync(sub, { mode: 0o755 });
+    fs.chmodSync(sub, 0o755);
+    usage.writeCapture(path.join(sub, 'usage.json'), Buffer.from('{}'));
+    assert.equal(mode(sub), 0o755);
+  });
+
+  test('replaces a symlink entry and leaves its target untouched', () => {
+    const target = path.join(dir, 'victim.txt');
+    fs.writeFileSync(target, 'keep me');
+    const link = path.join(dir, 'link.json');
+    fs.symlinkSync(target, link);
+    usage.writeCapture(link, Buffer.from('{"y":2}'));
+    assert.equal(fs.lstatSync(link).isSymbolicLink(), false);
+    assert.equal(fs.readFileSync(link, 'utf8'), '{"y":2}');
+    assert.equal(fs.readFileSync(target, 'utf8'), 'keep me');
+  });
+
+  test('throws when the parent is a regular file', () => {
+    const blocker = path.join(dir, 'blocker');
+    fs.writeFileSync(blocker, '');
+    assert.throws(() => usage.writeCapture(path.join(blocker, 'usage.json'), Buffer.from('{}')));
+  });
+
+  test('cleanupTmp removes only this file\'s tmp siblings older than 10 minutes', () => {
+    const sub = path.join(dir, 'cleanup');
+    fs.mkdirSync(sub);
+    const file = path.join(sub, 'usage.json');
+    const now = new Date('2026-05-01T12:00:00Z');
+    const old = new Date(now.getTime() - 11 * 60 * 1000);
+    const recent = new Date(now.getTime() - 9 * 60 * 1000);
+    const make = (name, t) => {
+      const p = path.join(sub, name);
+      fs.writeFileSync(p, '');
+      fs.utimesSync(p, t, t);
+      return p;
+    };
+    const stale = make('usage.json.tmp-1-aa', old);
+    const fresh = make('usage.json.tmp-2-bb', recent);
+    const unrelated = make('other.json.tmp-3-cc', old);
+    const plain = make('usage.json.bak', old);
+    assert.equal(usage.TMP_MAX_AGE_MS, 10 * 60 * 1000);
+    usage.cleanupTmp(file, now);
+    assert.equal(fs.existsSync(stale), false);
+    assert.ok(fs.existsSync(fresh));
+    assert.ok(fs.existsSync(unrelated));
+    assert.ok(fs.existsSync(plain));
+  });
+});
+
+describe('neat usage-capture', () => {
+  let cfg;
+  let proj;
+
+  before(() => {
+    proj = makeTempDir('neat-usage-proj-');
+  });
+
+  after(() => removeDir(proj));
+
+  // Fresh config dir per case; raw Buffers in and out.
+  function capture(args, input, setup) {
+    cfg = makeTempDir('neat-usage-cfg-');
+    if (setup) setup(cfg);
+    const env = childEnv({ CLAUDE_CONFIG_DIR: cfg, NEAT_PROJECT_DIR: proj });
+    const res = spawnSync(process.execPath, [HELPER, 'usage-capture', ...args], { cwd: proj, env, input });
+    if (res.error) throw res.error;
+    return { status: res.status, stdout: res.stdout, stderr: res.stderr.toString('utf8'), file: path.join(cfg, 'neat', 'usage.json') };
+  }
+
+  const JSON_IN = Buffer.from(`{"rate_limits":{"five_hour":{"used_percentage":40,"resets_at":${NOW_SEC + 3600}}}}`);
+
+  function expectPassThrough(res, input) {
+    assert.equal(res.status, 0);
+    assert.equal(res.stderr, '');
+    assert.deepEqual(res.stdout, input);
+  }
+
+  test('passes stdin through byte for byte and writes a private capture', () => {
+    const res = capture([], JSON_IN);
+    expectPassThrough(res, JSON_IN);
+    assert.deepEqual(fs.readFileSync(res.file), JSON_IN);
+    assert.equal(mode(res.file), 0o600);
+    assert.equal(mode(path.dirname(res.file)), 0o700);
+    assert.deepEqual(tmpSiblings(res.file), []);
+    removeDir(cfg);
+  });
+
+  test('--quiet prints nothing and still writes', () => {
+    const res = capture(['--quiet'], JSON_IN);
+    assert.equal(res.status, 0);
+    assert.equal(res.stdout.length, 0);
+    assert.deepEqual(fs.readFileSync(res.file), JSON_IN);
+    removeDir(cfg);
+  });
+
+  test('--path writes to the given absolute file; a relative path writes nothing', () => {
+    const target = path.join(proj, 'custom', 'cap.json');
+    const res = capture(['--path', target], JSON_IN);
+    expectPassThrough(res, JSON_IN);
+    assert.deepEqual(fs.readFileSync(target), JSON_IN);
+    assert.equal(fs.existsSync(res.file), false);
+    removeDir(cfg);
+    const rel = capture(['--path', 'rel.json'], JSON_IN);
+    expectPassThrough(rel, JSON_IN);
+    assert.equal(fs.existsSync(path.join(proj, 'rel.json')), false);
+    assert.equal(fs.existsSync(rel.file), false);
+    removeDir(cfg);
+  });
+
+  test('input that is not a JSON object passes through and writes nothing', () => {
+    for (const text of ['not json', '[1]', '', '42']) {
+      const input = Buffer.from(text);
+      const res = capture([], input);
+      expectPassThrough(res, input);
+      assert.equal(fs.existsSync(res.file), false, text);
+      removeDir(cfg);
+    }
+  });
+
+  test('an unknown flag passes through and writes nothing', () => {
+    const res = capture(['--pth', 'x'], JSON_IN);
+    expectPassThrough(res, JSON_IN);
+    assert.equal(fs.existsSync(res.file), false);
+    removeDir(cfg);
+  });
+
+  test('an invalid global config passes through and writes nothing', () => {
+    const res = capture([], JSON_IN, (dir) => {
+      fs.mkdirSync(path.join(dir, 'neat'));
+      fs.writeFileSync(path.join(dir, 'neat', 'config.json'), '{"bogus":1}');
+    });
+    expectPassThrough(res, JSON_IN);
+    assert.equal(fs.existsSync(res.file), false);
+    removeDir(cfg);
+  });
+
+  test('the global usage.capturePath is honoured', () => {
+    const target = path.join(proj, 'from-config.json');
+    const res = capture([], JSON_IN, (dir) => {
+      fs.mkdirSync(path.join(dir, 'neat'));
+      fs.writeFileSync(path.join(dir, 'neat', 'config.json'), JSON.stringify({ usage: { capturePath: target } }));
+    });
+    expectPassThrough(res, JSON_IN);
+    assert.deepEqual(fs.readFileSync(target), JSON_IN);
+    removeDir(cfg);
+  });
+
+  test('an unwritable target passes through with exit 0 and no stderr', () => {
+    const blocker = path.join(proj, 'blocker-file');
+    fs.writeFileSync(blocker, '');
+    const res = capture(['--path', path.join(blocker, 'usage.json')], JSON_IN);
+    expectPassThrough(res, JSON_IN);
+    removeDir(cfg);
+  });
+
+  test('non-UTF-8 bytes pass through byte-exact', () => {
+    const input = Buffer.concat([Buffer.from('{"a":"'), Buffer.from([0xff, 0xfe, 0xc3]), Buffer.from('"}')]);
+    const res = capture([], input);
+    expectPassThrough(res, input);
+    removeDir(cfg);
+    const raw = Buffer.from([0x80, 0x81, 0x0a, 0xff]);
+    const res2 = capture([], raw);
+    expectPassThrough(res2, raw);
+    assert.equal(fs.existsSync(res2.file), false);
+    removeDir(cfg);
+  });
+
+  test('help lists usage-capture', () => {
+    const res = spawnSync(process.execPath, [HELPER, 'help'], { env: childEnv(), encoding: 'utf8' });
+    assert.match(res.stdout, /^neat usage-capture \[--path <file>\] \[--quiet\]$/m);
   });
 });

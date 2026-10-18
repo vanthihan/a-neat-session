@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const LIB = path.join(__dirname, '..', 'lib');
@@ -14,6 +15,7 @@ const brief = require(path.join(LIB, 'brief.cjs'));
 const gitOps = require(path.join(LIB, 'git-ops.cjs'));
 const route = require(path.join(LIB, 'route.cjs'));
 const config = require(path.join(LIB, 'config.cjs'));
+const usage = require(path.join(LIB, 'usage.cjs'));
 
 const MAX_ERROR_LINES = 5;
 
@@ -33,6 +35,7 @@ const HELP = [
   'neat config show [<run-id>]',
   'neat config get <profile|thresholds.soft|thresholds.hard|usage.capturePath>',
   'neat status [--json]',
+  'neat usage-capture [--path <file>] [--quiet]',
   'neat help',
 ].join('\n');
 
@@ -212,8 +215,69 @@ function cmdConfig(sub, args) {
   throw new UsageError('usage: neat config show [<run-id>] | neat config get <key>');
 }
 
+// usage-capture flags; null when any flag is unknown or incomplete.
+function captureFlags(args) {
+  const flags = { quiet: false, path: null };
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === '--quiet') flags.quiet = true;
+    else if (a === '--path' && flags.path === null && args[i + 1]) flags.path = args[(i += 1)];
+    else if (a.startsWith('--path=') && flags.path === null && a.length > 7) flags.path = a.slice(7);
+    else return null;
+  }
+  return flags;
+}
+
+// --path (absolute or ~/) wins; else the global usage.capturePath or the
+// default <claude-config-dir>/neat/usage.json (the file routing reads).
+// null means "do not write".
+function capturePath(flagPath) {
+  const home = os.homedir();
+  if (flagPath !== null) {
+    const expanded = flagPath.startsWith('~/') ? path.join(home, flagPath.slice(2)) : flagPath;
+    return path.isAbsolute(expanded) ? path.resolve(expanded) : null;
+  }
+  const global = config.readConfigFile(config.globalConfigPath(process.env, home), { scope: 'global', home });
+  return (global.usage && global.usage.capturePath) || config.defaultCapturePath(process.env, home);
+}
+
+function isJsonObject(bytes) {
+  try {
+    const data = JSON.parse(bytes.toString('utf8'));
+    return data !== null && typeof data === 'object' && !Array.isArray(data);
+  } catch {
+    return false;
+  }
+}
+
+// Status line filter: stdin goes to stdout unchanged first, then the capture
+// is written best-effort. Always exits 0 and never writes to stderr, because
+// a failing status line command blanks the user's status line.
+function cmdUsageCapture(args) {
+  process.stdout.on('error', () => {});
+  let bytes = Buffer.alloc(0);
+  try {
+    bytes = fs.readFileSync(0);
+  } catch {
+    // no readable stdin
+  }
+  const flags = captureFlags(args);
+  try {
+    if (!(flags && flags.quiet)) process.stdout.write(bytes);
+    if (!flags || !isJsonObject(bytes)) return 0;
+    const file = capturePath(flags.path);
+    if (file === null) return 0;
+    usage.writeCapture(file, bytes);
+    usage.cleanupTmp(file, new Date());
+  } catch {
+    // best effort: the pass-through already happened
+  }
+  return 0;
+}
+
 function dispatch(argv) {
   const [cmd, sub, ...rest] = argv;
+  if (cmd === 'usage-capture') return cmdUsageCapture(argv.slice(1));
   if (cmd === 'run' && sub === 'new') return cmdRunNew(rest);
   if (cmd === 'run' && sub === 'stage') return cmdRunStage(rest);
   if (cmd === 'run' && sub === 'worker') return cmdRunWorker(rest);
