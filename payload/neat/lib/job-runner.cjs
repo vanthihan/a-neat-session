@@ -57,6 +57,10 @@ function jobPlan(root, state, worker, { env, sandbox }) {
     throw new UsageError(`no brief for ${worker}: run neat brief ${state.id} ${worker} first`);
   }
   const entry = (state.workers || []).find((w) => w.name === worker) || {};
+  const previous = entry.job ? jobs.readJob(root, state.id, entry.job) : null;
+  if (previous && previous.status === 'running' && jobs.isAlive(previous)) {
+    throw new UsageError(`job ${previous.id} of ${worker} is still running (wait for it or cancel it first)`);
+  }
   return { role, briefPath, codexPath, sandbox: chosen, effort: entry.effort || 'none', model: cfg.codex.model };
 }
 

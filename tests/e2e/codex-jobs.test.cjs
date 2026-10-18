@@ -299,6 +299,10 @@ test('timeout, result while running, then cancel stops the whole group', () => {
   assert.equal(early.stdout, `job ${job} status=running\n`);
   assert.equal(fs.existsSync(path.join(dir, 'report-reviewer.md')), false);
 
+  const twice = neat(['codex', 'run', path.basename(dir), 'reviewer']);
+  assert.equal(twice.status, 2);
+  assert.match(twice.stderr, new RegExp(`job ${job} of reviewer is still running`));
+
   const codexPid = codexPidFor(dir);
   assert.ok(codexPid, 'fake codex must have started');
   const res = neat(['codex', 'cancel', job]);
