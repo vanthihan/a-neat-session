@@ -20,7 +20,7 @@ You are the neat orchestrator for this run. Follow the sections below in order.
 ## Worker loop
 Every stage runs this routine for a worker list W and guard arguments G:
 1. Brief: for each worker w run `node {{NEAT_BIN}} brief {id} {w}`; it prints the brief path, then a line `route worker={w} model={m} effort={e} ...`. Keep both. Only when a stage supplies notes, add `--stdin` and pass the notes in a `<<'NEAT_EOF'` heredoc ending with `NEAT_EOF`. If a route line says `target=codex` or an `action=` other than `run`, run `node {{NEAT_BIN}} guide codex` once and follow it for those workers.
-2. Launch: start all workers of W in ONE message with the Agent tool. subagent_type is `neat-implementer` for `implementer-T*`, `neat-docs` for `docs-D*`, and `neat-explorer`, `neat-researcher`, `neat-reviewer` or `neat-tester` for the others (`neat-{w}`). The prompt is exactly `Brief: ` followed by that worker's brief path. Pass only subagent_type, a short description, that prompt, and `model` and `effort` copied from that worker's route line; omit `model` when it is `inherit` and `effort` when it is `none`. If the Agent tool rejects `effort`, launch again without it.
+2. Launch: start all workers of W in ONE message with the Agent tool. subagent_type is `neat-implementer` for `implementer-T*`, `neat-docs` for `docs-D*`, `neat-reviewer` for `reviewer-2`, and `neat-explorer`, `neat-researcher`, `neat-reviewer` or `neat-tester` for the others (`neat-{w}`). The prompt is exactly `Brief: ` followed by that worker's brief path. Pass only subagent_type, a short description, that prompt, and `model` and `effort` copied from that worker's route line; omit `model` when it is `inherit` and `effort` when it is `none`. If the Agent tool rejects `effort`, launch again without it.
 3. Wait: end your turn with `Waiting for: {W}`. Continue only after every launched worker's completion notification has arrived. If the Agent tool returned the results directly, continue at once. Never poll, sleep or read transcripts.
 4. Check: for each w run `node {{NEAT_BIN}} report check {dir}/report-{w}.md`. On exit 1, send the printed error lines once with SendMessage to that worker asking for a corrected report, end your turn, then check again. A second failure: `run worker {id} {w} report-invalid`. Otherwise run `run worker {id} {w} done`, or `run worker {id} {w} failed` when its Status says failed.
 5. Guard: run `node {{NEAT_BIN}} run guard {id} {G}`. Keep every `note:` line for Finish. On exit 1: in auto mode run `run stage {id} cancelled` and go to Finish showing the violation lines; in gate and step mode ask with AskUserQuestion, showing the violation lines, with options Continue / Stop (Stop: `run stage {id} cancelled`, go to Finish).
@@ -82,7 +82,7 @@ Run `node {{NEAT_BIN}} run stage {id} implement`. For each batch in the `impleme
 Step mode: after the user continues, run `node {{NEAT_BIN}} run commit {id}` and keep its output line.
 
 ## Review
-Run `node {{NEAT_BIN}} run stage {id} review`, then `node {{NEAT_BIN}} run diff {id}`, then the Worker loop with W = `reviewer` and no G. Keep the reviewer's top findings for Finish; list them, do not start extra fix work.
+Run `node {{NEAT_BIN}} run stage {id} review`, then `node {{NEAT_BIN}} guide review` once, and follow it.
 
 ## Test
 Run `node {{NEAT_BIN}} run stage {id} test`. When the explorer report named a test command, pass it as notes:
@@ -108,7 +108,7 @@ Unless the run was cancelled, run `node {{NEAT_BIN}} run stage {id} done`. Then 
 - `Run {id} ({mode})`
 - one line per stage that ran, with its worker Status
 - the commit line or lines
-- up to 3 reviewer findings
+- up to 3 merged review findings
 - the test result
 - up to 3 open questions from the reports
 - the guard `note:` lines merged into one line (files left uncommitted), if any
