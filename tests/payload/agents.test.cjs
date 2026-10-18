@@ -175,3 +175,18 @@ test('explorer lists questions the repository cannot answer as research: open qu
   assert.match(body, /`## Open questions`/);
   assert.match(body, /`research: \.\.\.`/);
 });
+
+describe('neat-reviewer file names', () => {
+  const { body } = parseAgent(load('neat-reviewer'));
+
+  test('review file and report names come from the brief, never fixed names', () => {
+    assert.ok(!/review\.md|report-reviewer\.md/.test(body), 'no hardcoded review or report file name');
+    const review = body.slice(body.indexOf('## Review file'), body.indexOf('## Report'));
+    const report = body.slice(body.indexOf('## Report'));
+    assert.match(review, /`Review file:`/);
+    assert.match(review, /write \{run id\}/);
+    assert.match(review, /`path:line - high\|medium\|low - issue`/);
+    assert.match(report, /`Report:`/);
+    assert.match(report, /`report ok`/);
+  });
+});

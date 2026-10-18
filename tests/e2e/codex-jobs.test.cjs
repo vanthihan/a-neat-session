@@ -398,3 +398,33 @@ test('status lists the job through the installed helper; cancel --stdin stops a 
   }
   assert.ok(neat(['status']).stdout.includes(`${job}  run=${id}  worker=reviewer  mode=bg  status=cancelled  age=0s\n`));
 });
+
+test('reviewer-2: codex below hard, skipped at hard; its job runs read-only into its own -o file', () => {
+  const { id, dir } = newRun('second reviewer on codex');
+  assert.match(briefLine(id, 'reviewer-2'), / hard=yes ctx=unknown target=claude action=skip$/);
+  const quiet = makeTempDir('neat-cdx-cfg-');
+  try {
+    const line = briefLine(id, 'reviewer-2', { CLAUDE_CONFIG_DIR: quiet });
+    assert.match(line, /^route worker=reviewer-2 model=sonnet effort=medium .* hard=no ctx=unknown target=codex action=run$/);
+  } finally {
+    removeDir(quiet);
+  }
+  const refused = neat(['codex', 'run', id, 'reviewer-2', '--sandbox', 'workspace-write']);
+  assert.equal(refused.status, 2);
+  assert.match(refused.stderr, /read-only/);
+
+  fs.rmSync(log, { force: true });
+  const res = neat(['codex', 'run', id, 'reviewer-2']);
+  assert.equal(res.status, 0, res.stderr);
+  const m = res.stdout.trim().match(/^job=(reviewer-2-[0-9a-f]{4}) worker=reviewer-2 mode=bg sandbox=read-only pid=\d+$/);
+  assert.ok(m, res.stdout);
+  assert.match(waitJob(m[1]).line, /status=done exit=0 worker=reviewer-2$/);
+  const exec = calls().find((c) => c.argv[0] === 'exec');
+  const out = path.join(dir, 'codex-reviewer-2.md');
+  assert.deepEqual(exec.argv.slice(0, 3), ['exec', '-s', 'read-only']);
+  assert.equal(exec.argv[exec.argv.indexOf('-o') + 1], out);
+  assert.ok(exec.stdin.startsWith('# Brief: reviewer-2\n'));
+  assert.ok(exec.stdin.includes(`Review file: ${path.join(dir, 'review-2.md')}`));
+  assert.ok(exec.stdin.includes('`path:line - high|medium|low - issue`'));
+  assert.ok(fs.existsSync(out));
+});

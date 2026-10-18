@@ -374,3 +374,113 @@ describe('routeWorker engine at the hard threshold', () => {
     }
   });
 });
+
+describe('second reviewer (reviewer-2)', () => {
+  const NOW = new Date('2026-05-01T12:00:00Z');
+  const FUTURE = Math.floor(NOW.getTime() / 1000) + 3600;
+  let root;
+  let cfgDir;
+  let binDir;
+  let shim;
+
+  before(() => {
+    root = makeTempDir('neat-route-r2-root-');
+    cfgDir = makeTempDir('neat-route-r2-cfg-');
+    binDir = makeTempDir('neat-route-r2-bin-');
+    shim = installFakeCodex(binDir);
+    fs.mkdirSync(path.join(cfgDir, 'neat'));
+  });
+
+  after(() => {
+    removeDir(root);
+    removeDir(cfgDir);
+    removeDir(binDir);
+  });
+
+  function setUsage(fiveHour) {
+    const file = path.join(cfgDir, 'neat', 'usage.json');
+    if (fiveHour === null) {
+      fs.rmSync(file, { force: true });
+      return;
+    }
+    const data = { rate_limits: { five_hour: { used_percentage: fiveHour, resets_at: FUTURE } } };
+    fs.writeFileSync(file, JSON.stringify(data));
+  }
+
+  function setGlobal(obj) {
+    const file = path.join(cfgDir, 'neat', 'config.json');
+    if (obj === null) fs.rmSync(file, { force: true });
+    else fs.writeFileSync(file, JSON.stringify(obj));
+  }
+
+  function routed(worker, { profile = null, complexity = 'normal', bin = 'none' } = {}) {
+    const env = { CLAUDE_CONFIG_DIR: cfgDir, NEAT_CODEX_BIN: bin };
+    return route.routeWorker(root, { profile, complexity }, worker, env, NOW, cfgDir);
+  }
+
+  function pair(opts) {
+    return [routed('reviewer', opts), routed('reviewer-2', opts)].map((r) => `${r.model}/${r.effort} ${r.target} ${r.action}`);
+  }
+
+  test('reviewer-2 is a valid worker name with the reviewer role', () => {
+    assert.ok(rs.WORKER_NAME.test('reviewer-2'));
+    for (const bad of ['reviewer-3', 'reviewer2', 'reviewer-', 'reviewer-22']) assert.ok(!rs.WORKER_NAME.test(bad), bad);
+    assert.equal(route.roleOf('reviewer-2'), 'reviewer');
+    assert.throws(() => route.assertRoutable('wizard'), /reviewer-2/);
+    assert.doesNotThrow(() => route.assertRoutable('reviewer-2'));
+  });
+
+  test('without codex the second reviewer runs on Claude on the alternate tier', () => {
+    setGlobal(null);
+    setUsage(null);
+    assert.deepEqual(pair({}), ['opus/medium claude run', 'sonnet/medium claude run']);
+    assert.deepEqual(pair({ profile: 'budget' }), ['sonnet/medium claude run', 'opus/medium claude run']);
+    assert.deepEqual(pair({ profile: 'quality', complexity: 'risky' }), ['opus/high claude run', 'sonnet/high claude run']);
+    assert.deepEqual(pair({ profile: 'inherit' }), ['inherit/none claude run', 'sonnet/none claude run']);
+  });
+
+  test('the soft step-down applies to both reviewers, so they stay apart', () => {
+    setGlobal(null);
+    setUsage(72);
+    assert.deepEqual(pair({}), ['sonnet/medium claude run', 'haiku/medium claude run']);
+    const second = routed('reviewer-2');
+    assert.equal(second.stepdown, true);
+    assert.deepEqual(pair({ profile: 'inherit' }), ['inherit/none claude run', 'sonnet/none claude run']);
+    assert.equal(routed('reviewer-2', { profile: 'inherit' }).stepdown, false);
+  });
+
+  test('for every profile, complexity and usage the two reviewer models differ', () => {
+    setGlobal(null);
+    for (const usage of [null, 72]) {
+      setUsage(usage);
+      for (const profile of PROFILES) {
+        for (const complexity of COMPLEXITIES) {
+          const a = routed('reviewer', { profile, complexity });
+          const b = routed('reviewer-2', { profile, complexity });
+          assert.notEqual(a.model, b.model, `${profile} ${complexity} usage=${usage}`);
+        }
+      }
+    }
+    setUsage(null);
+  });
+
+  test('with codex available below hard the second reviewer goes to codex, keeping the fallback model', () => {
+    setGlobal(null);
+    setUsage(50);
+    assert.deepEqual(pair({ bin: shim }), ['opus/medium claude run', 'sonnet/medium codex run']);
+    setGlobal({ codex: { enabled: 'off' } });
+    assert.deepEqual(pair({ bin: shim }), ['opus/medium claude run', 'sonnet/medium claude run']);
+    setGlobal(null);
+  });
+
+  test('at hard with codex the reviewer goes to codex and reviewer-2 is skipped; without codex both pause', () => {
+    setGlobal(null);
+    setUsage(95);
+    const withCodex = pair({ bin: shim }).map((s) => s.split(' ').slice(1).join(' '));
+    assert.deepEqual(withCodex, ['codex run', 'claude skip']);
+    const without = pair({}).map((s) => s.split(' ').slice(1).join(' '));
+    assert.deepEqual(without, ['claude pause', 'claude pause']);
+    assert.match(route.formatRoute(routed('reviewer-2', { bin: shim })), / target=claude action=skip$/);
+    setUsage(null);
+  });
+});

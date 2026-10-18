@@ -516,3 +516,34 @@ test('an implementer brief lists researcher notes and report once they exist', (
   const text = fs.readFileSync(res.stdout.split('\n')[0], 'utf8');
   assert.match(text, /## Context files\n(- .*\n)*- .*report-researcher\.md\n- .*research-notes\.md\n/);
 });
+
+test('reviewer-2 brief names its own review file and report, the shared diff and read-only rules', () => {
+  const exists = (p) => p === `${RUN_DIR}/diff.patch`;
+  const text = brief('reviewer-2', { exists });
+  assert.match(text, /^# Brief: reviewer-2$/m);
+  assert.ok(text.includes(`Report: ${RUN_DIR}/report-reviewer-2.md`));
+  assert.ok(text.includes(`Review file: ${RUN_DIR}/review-2.md`));
+  assert.ok(!text.includes(`${RUN_DIR}/review.md`));
+  assert.ok(text.includes(`Diff: ${RUN_DIR}/diff.patch`));
+  assert.match(text, /## Files you own\n- none \(read-only role\)\n/);
+  assert.ok(text.includes('- Do not edit, create or delete project files.'));
+  assert.ok(text.includes(`write ${STATE.id} report-reviewer-2.md --stdin`));
+  assert.ok(brief('reviewer', { exists }).includes(`Review file: ${RUN_DIR}/review.md`));
+});
+
+test('run worker and brief accept reviewer-2; invalid names list it', () => {
+  const { id, dir } = newRun('second reviewer');
+  const ok = neat(['run', 'worker', id, 'reviewer-2', 'done']);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(ok.stdout, 'worker reviewer-2 done\n');
+  assert.equal(readState(dir).workers.find((x) => x.name === 'reviewer-2').status, 'done');
+  const res = neat(['brief', id, 'reviewer-2']);
+  assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stdout.split('\n')[0], path.join(dir, 'brief-reviewer-2.md'));
+  assert.ok(res.stdout.split('\n')[1].startsWith('route worker=reviewer-2 model=sonnet effort=medium '), res.stdout);
+  for (const args of [['run', 'worker', id, 'reviewer-3', 'done'], ['brief', id, 'reviewer2']]) {
+    const bad = neat(args);
+    assert.equal(bad.status, 2, args.join(' '));
+    assert.match(bad.stderr, /\|reviewer\|reviewer-2\|/);
+  }
+});
