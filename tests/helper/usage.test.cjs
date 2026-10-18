@@ -227,9 +227,9 @@ describe('writeCapture and cleanupTmp', () => {
       fs.utimesSync(p, t, t);
       return p;
     };
-    const stale = make('usage.json.tmp-1-aa', old);
-    const fresh = make('usage.json.tmp-2-bb', recent);
-    const unrelated = make('other.json.tmp-3-cc', old);
+    const stale = make('usage.json.tmp-1-0123456789ab', old);
+    const fresh = make('usage.json.tmp-2-bbbbbbbbbbbb', recent);
+    const unrelated = make('other.json.tmp-3-cccccccccccc', old);
     const plain = make('usage.json.bak', old);
     assert.equal(usage.TMP_MAX_AGE_MS, 10 * 60 * 1000);
     usage.cleanupTmp(file, now);
@@ -237,6 +237,28 @@ describe('writeCapture and cleanupTmp', () => {
     assert.ok(fs.existsSync(fresh));
     assert.ok(fs.existsSync(unrelated));
     assert.ok(fs.existsSync(plain));
+  });
+
+  test('cleanupTmp keeps user files and symlinks that only share the tmp prefix', () => {
+    const sub = path.join(dir, 'cleanup-foreign');
+    fs.mkdirSync(sub);
+    const file = path.join(sub, 'statusline.json');
+    const now = new Date('2026-05-01T12:00:00Z');
+    const old = new Date(now.getTime() - 60 * 60 * 1000);
+    const keep = ['statusline.json.tmp-backup', 'statusline.json.tmp-1-ABCDEF012345', 'statusline.json.tmp-1-0123456789abc', 'statusline.json.tmp-x-0123456789ab'];
+    for (const name of keep) {
+      fs.writeFileSync(path.join(sub, name), 'user data');
+      fs.utimesSync(path.join(sub, name), old, old);
+    }
+    const target = path.join(sub, 'target.txt');
+    fs.writeFileSync(target, 'keep');
+    const link = path.join(sub, 'statusline.json.tmp-7-0123456789ab');
+    fs.symlinkSync(target, link);
+    fs.lutimesSync(link, old, old);
+    usage.cleanupTmp(file, now);
+    for (const name of keep) assert.ok(fs.existsSync(path.join(sub, name)), name);
+    assert.ok(fs.lstatSync(link).isSymbolicLink());
+    assert.equal(fs.readFileSync(target, 'utf8'), 'keep');
   });
 });
 

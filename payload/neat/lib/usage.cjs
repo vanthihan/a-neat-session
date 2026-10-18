@@ -18,6 +18,8 @@ const WINDOWS = Object.freeze(['five_hour', 'seven_day']);
 // are removed.
 const TMP_MAX_AGE_MS = 10 * 60 * 1000;
 const TMP_MARK = '.tmp-';
+// Random bytes in a tmp name (written as twice as many hex digits).
+const TMP_HEX = 6;
 
 function isObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -96,7 +98,7 @@ function writeCapture(file, bytes) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     fs.chmodSync(dir, 0o700);
   }
-  const tmp = `${file}${TMP_MARK}${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
+  const tmp = `${file}${TMP_MARK}${process.pid}-${crypto.randomBytes(TMP_HEX).toString('hex')}`;
   const fd = fs.openSync(tmp, 'wx', 0o600);
   try {
     try {
@@ -112,16 +114,22 @@ function writeCapture(file, bytes) {
   }
 }
 
-// Removes `<basename>.tmp-*` siblings of `file` older than TMP_MAX_AGE_MS.
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Removes regular files named exactly like writeCapture's tmp siblings of
+// `file` (`<basename>.tmp-<pid>-<12 hex>`) that are older than TMP_MAX_AGE_MS.
+// Other names, symlinks and directories are left alone.
 function cleanupTmp(file, now = new Date()) {
   const dir = path.dirname(file);
-  const prefix = `${path.basename(file)}${TMP_MARK}`;
+  const own = new RegExp(`^${escapeRegExp(path.basename(file) + TMP_MARK)}\\d+-[0-9a-f]{${TMP_HEX * 2}}$`);
   for (const name of fs.readdirSync(dir)) {
-    if (!name.startsWith(prefix)) continue;
+    if (!own.test(name)) continue;
     const p = path.join(dir, name);
     try {
       const st = fs.lstatSync(p);
-      if (!st.isDirectory() && now.getTime() - st.mtimeMs > TMP_MAX_AGE_MS) fs.unlinkSync(p);
+      if (st.isFile() && now.getTime() - st.mtimeMs > TMP_MAX_AGE_MS) fs.unlinkSync(p);
     } catch {
       // raced with another run; leave it
     }
