@@ -22,7 +22,7 @@ const DO_MENTIONS = [
   'neat-explorer', 'neat-implementer', 'neat-reviewer', 'neat-tester', 'neat-docs',
   'Brief: ', 'subagent_type', 'AskUserQuestion', 'SendMessage', 'untrusted',
   'run commit', 'plan check', 'run guard', 'run classify', 'gate', 'auto', 'step',
-  'must not contain a line NEAT_EOF',
+  'must not contain a line NEAT_EOF', 'skipped',
 ];
 const BIN_CALL = /node \{\{NEAT_BIN\}\}( [^`\n]*)?/g;
 

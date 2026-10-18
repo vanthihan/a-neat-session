@@ -317,10 +317,67 @@ test('plan check on a valid plan prints batches and records tasks in state.json'
   fs.writeFileSync(path.join(dir, 'plan.md'), VALID_PLAN);
   const res = neat(['plan', 'check', id]);
   assert.equal(res.status, 0, res.stderr);
-  assert.equal(res.stdout, 'plan ok tasks=4 implement=[T1,T2] [T3] docs=[D1]\n');
+  assert.equal(res.stdout, 'plan ok tasks=4 stages=explore,plan,implement,review,test,docs implement=[T1,T2] [T3] docs=[D1]\n');
   const state = readState(dir);
   assert.deepEqual(state.tasks.map((t) => [t.id, t.batch]), [['T1', 0], ['T2', 0], ['T3', 1], ['D1', 0]]);
   assert.deepEqual(Object.keys(state.tasks[0]).sort(), ['batch', 'do', 'id', 'owns', 'title', 'worker']);
+});
+
+// ---------- stage-aware plan check ----------
+
+function typedRun(taskText, type) {
+  const run = newRun(taskText);
+  const res = neat(['stages', run.id, '--type', type]);
+  assert.equal(res.status, 0, res.stderr);
+  return run;
+}
+
+function checkWith(dir, id, ...parts) {
+  fs.writeFileSync(path.join(dir, 'plan.md'), planOf(...parts));
+  return neat(['plan', 'check', id]);
+}
+
+test('a small-fix plan needs no docs task and prints the selected stages', () => {
+  const { id, dir } = typedRun('small fix plan', 'small-fix');
+  const res = checkWith(dir, id, task('T1', 'src/a.js'));
+  assert.equal(res.status, 0, res.stdout);
+  assert.equal(res.stdout, 'plan ok tasks=1 stages=explore,plan,implement,test implement=[T1] docs=none\n');
+});
+
+test('tasks for an unselected stage are rejected', () => {
+  const small = typedRun('small fix with docs', 'small-fix');
+  let res = checkWith(small.dir, small.id, task('T1', 'src/a.js'), task('D1', 'README.md'));
+  assert.equal(res.status, 1);
+  assert.ok(res.stdout.split('\n').includes('D1: docs stage not selected'), res.stdout);
+  const docs = typedRun('docs with code', 'docs');
+  res = checkWith(docs.dir, docs.id, task('T1', 'src/a.js'), task('D1', 'README.md'));
+  assert.equal(res.status, 1);
+  assert.ok(res.stdout.split('\n').includes('T1: implement stage not selected'), res.stdout);
+});
+
+test('a docs plan needs only docs tasks', () => {
+  const { id, dir } = typedRun('docs only', 'docs');
+  const res = checkWith(dir, id, task('D1', 'README.md'));
+  assert.equal(res.status, 0, res.stdout);
+  assert.equal(res.stdout, 'plan ok tasks=1 stages=explore,plan,docs implement=none docs=[D1]\n');
+});
+
+test('a feature plan still needs implementer and docs tasks', () => {
+  const a = typedRun('feature no docs', 'feature');
+  let res = checkWith(a.dir, a.id, task('T1', 'src/a.js'));
+  assert.equal(res.status, 1);
+  assert.equal(res.stdout, 'plan needs at least one docs task (## D1: ...)\n');
+  const b = typedRun('feature no code', 'feature');
+  res = checkWith(b.dir, b.id, task('D1', 'README.md'));
+  assert.equal(res.status, 1);
+  assert.equal(res.stdout, 'plan needs at least one implementer task (## T1: ...)\n');
+});
+
+test('parsePlan with a selection checks task kinds against it', () => {
+  const plan = planOf(task('T1', 'a.js'), task('D1', 'README.md'));
+  assert.deepEqual(parsePlan(plan, ['explore', 'plan', 'implement', 'test']).errors, ['D1: docs stage not selected']);
+  assert.deepEqual(parsePlan(plan, ['explore', 'plan', 'docs']).errors, ['T1: implement stage not selected']);
+  assert.deepEqual(parsePlan(plan).errors, []);
 });
 
 test('brief explorer before any plan writes the file, prints its path and route line and marks the worker running', () => {

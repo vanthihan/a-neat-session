@@ -11,6 +11,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const runState = require('./run-state.cjs');
+const { selectedOf } = require('./stages.cjs');
 
 const TASK_HEADING = /^## ([TD]\d+): (.+)$/;
 const KEY_LINE = /^\s*(worker|owns|do):\s?(.*)$/;
@@ -20,6 +21,13 @@ const WORKER_FOR_PREFIX = Object.freeze({ T: 'implementer', D: 'docs' });
 const RESERVED_TOP = Object.freeze(['.claude']);
 const RESERVED_ANYWHERE = Object.freeze(['.neat', '.git']);
 const MAX_ERROR_LINES = 10;
+// Stages a run has when `neat stages` was never called (Phase 1 rules).
+const DEFAULT_SELECTED = Object.freeze(['explore', 'plan', 'implement', 'review', 'test', 'docs']);
+// Task kind -> the stage that runs it and the error when none is planned.
+const KINDS = Object.freeze([
+  Object.freeze({ worker: 'implementer', stage: 'implement', missing: 'plan needs at least one implementer task (## T1: ...)' }),
+  Object.freeze({ worker: 'docs', stage: 'docs', missing: 'plan needs at least one docs task (## D1: ...)' }),
+]);
 
 function newTask(id, title) {
   return { id, title: title.trim(), worker: null, ownsRaw: null, doLines: null, dupKeys: [] };
@@ -90,7 +98,22 @@ function validateTask(raw) {
   return { task, errors };
 }
 
-function parsePlan(text) {
+// Task kinds must match the selected stages: a kind is required when its
+// stage is selected and rejected when it is not.
+function stageErrors(tasks, selected) {
+  const errors = [];
+  for (const kind of KINDS) {
+    const ofKind = tasks.filter((t) => t.worker === kind.worker);
+    if (!selected.includes(kind.stage)) {
+      ofKind.forEach((t) => errors.push(`${t.id}: ${kind.stage} stage not selected`));
+    } else if (ofKind.length === 0) {
+      errors.push(kind.missing);
+    }
+  }
+  return errors;
+}
+
+function parsePlan(text, selected = DEFAULT_SELECTED) {
   const tasks = [];
   const errors = [];
   const seen = new Set();
@@ -104,10 +127,7 @@ function parsePlan(text) {
     tasks.push(res.task);
     errors.push(...res.errors);
   }
-  if (!tasks.some((t) => t.worker === 'implementer')) {
-    errors.push('plan needs at least one implementer task (## T1: ...)');
-  }
-  if (!tasks.some((t) => t.worker === 'docs')) errors.push('plan needs at least one docs task (## D1: ...)');
+  errors.push(...stageErrors(tasks, selected));
   return { tasks, errors };
 }
 
@@ -144,6 +164,7 @@ function computeBatches(tasks) {
 }
 
 function formatBatches(groups) {
+  if (groups.length === 0) return 'none';
   return groups.map((g) => `[${g.join(',')}]`).join(' ');
 }
 
@@ -152,13 +173,19 @@ function checkPlan(root, id, now) {
   const state = runState.loadRun(root, id);
   const file = path.join(runState.runDir(root, id), 'plan.md');
   if (!fs.existsSync(file)) return { ok: false, lines: ['plan.md not found'] };
-  const { tasks, errors } = parsePlan(fs.readFileSync(file, 'utf8'));
+  const selected = selectedOf(state);
+  const { tasks, errors } = parsePlan(fs.readFileSync(file, 'utf8'), selected);
   if (errors.length > 0) return { ok: false, lines: errors.slice(0, MAX_ERROR_LINES) };
   const numbers = batchNumbers(tasks);
   const recorded = tasks.map((t) => ({ ...t, owns: [...t.owns], batch: numbers.get(t.id) }));
   runState.saveRun(root, { ...state, tasks: recorded }, now);
   const batches = computeBatches(tasks);
-  const line = `plan ok tasks=${tasks.length} implement=${formatBatches(batches.implement)} docs=${formatBatches(batches.docs)}`;
+  const line = [
+    `plan ok tasks=${tasks.length}`,
+    `stages=${selected.join(',')}`,
+    `implement=${formatBatches(batches.implement)}`,
+    `docs=${formatBatches(batches.docs)}`,
+  ].join(' ');
   return { ok: true, lines: [line] };
 }
 

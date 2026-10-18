@@ -120,9 +120,10 @@ function briefLine(file, key) {
 }
 
 // Brief -> (stand-in work) -> report via `write` -> report check -> worker done.
-function runWorker(project, id, worker, { notes, work, reportText } = {}) {
+function runWorker(project, id, worker, { notes, work, reportText, route } = {}) {
   const args = notes ? ['brief', id, worker, '--stdin'] : ['brief', id, worker];
-  const briefPath = ok(project, args, notes).split('\n')[0];
+  const [briefPath, routeLine] = ok(project, args, notes).split('\n');
+  if (route) assert.match(routeLine, route);
   assert.ok(path.isAbsolute(briefPath), briefPath);
   assert.ok(fs.readFileSync(briefPath, 'utf8').startsWith(`# Brief: ${worker}`));
   if (work) work(briefPath);
@@ -222,7 +223,7 @@ function committedFiles(project, rev) {
   return git(project.dir, ['show', '--name-only', '--format=', rev]).trim().split('\n').sort();
 }
 
-function assertFinished(project, run) {
+function assertFinished(project, run, reportCount = 6) {
   const porcelain = git(project.dir, ['status', '--porcelain']).split('\n').filter(Boolean);
   assert.deepEqual(porcelain.filter((l) => l !== '?? .neat/'), []);
   const runs = JSON.parse(ok(project, ['status', '--json']));
@@ -231,7 +232,7 @@ function assertFinished(project, run) {
   assert.equal(entry.stage, 'done');
   assert.deepEqual(entry.activeWorkers, []);
   const reports = fs.readdirSync(run.dir).filter((f) => /^report-.*\.md$/.test(f));
-  assert.equal(reports.length, 6, reports.join(', '));
+  assert.equal(reports.length, reportCount, reports.join(', '));
   for (const f of reports) assert.match(ok(project, ['report', 'check', path.join(run.dir, f)]), /report ok/);
 }
 
@@ -303,5 +304,69 @@ describe('violations are caught by run guard', () => {
     const commit = neat(project, ['run', 'commit', run.id]);
     assert.equal(commit.status, 1);
     assert.match(commit.stdout, /commit refused: HEAD moved/);
+  });
+});
+
+const SMALL_PLAN = [
+  'stages explore,plan,implement,test type=small-fix propose=yes',
+  '',
+  '## T1: Greet from a',
+  'worker: implementer',
+  'owns: src/a.js',
+  'do: Export a greet() function from src/a.js.',
+  '',
+].join('\n');
+
+function stageStatuses(run) {
+  const state = JSON.parse(fs.readFileSync(path.join(run.dir, 'state.json'), 'utf8'));
+  return Object.fromEntries(state.stages.map((s) => [s.name, s.status]));
+}
+
+describe('gate mode small fix: only explore, plan, implement and test run', () => {
+  test('review and docs are skipped and the one commit holds only src/a.js', () => {
+    const project = makeProject();
+    const run = startRun(project, 'gate');
+    explore(project, run.id);
+    assert.equal(ok(project, ['run', 'classify', run.id, 'trivial']), 'complexity trivial\n');
+    assert.equal(ok(project, ['stages', run.id, '--type', 'small-fix']),
+      'stages explore,plan,implement,test type=small-fix propose=yes\n');
+
+    ok(project, ['run', 'stage', run.id, 'plan']);
+    ok(project, ['write', run.id, 'plan.md', '--stdin'], SMALL_PLAN);
+    assert.equal(ok(project, ['plan', 'check', run.id]),
+      'plan ok tasks=1 stages=explore,plan,implement,test implement=[T1] docs=none\n');
+
+    ok(project, ['run', 'stage', run.id, 'implement']);
+    runWorker(project, run.id, 'implementer-T1', {
+      route: /^route worker=implementer-T1 model=haiku effort=low .*complexity=trivial /,
+      work: () => write(project.dir, 'src/a.js', 'exports.greet = () => "hi";\n'),
+      reportText: report({ findings: '- src/a.js:1 - greet()' }),
+    });
+    const implGuard = guard(project, run.id, 'T1');
+    assert.equal(implGuard.status, 0, implGuard.stdout);
+
+    assert.equal(ok(project, ['run', 'stage', run.id, 'review']), 'stage review skipped\n');
+    ok(project, ['run', 'stage', run.id, 'test']);
+    runWorker(project, run.id, 'tester', {
+      work: () => ok(project, ['write', run.id, 'test-log.txt', '--stdin'], 'all tests passed\n'),
+      reportText: report({ artifacts: '- test-log.txt' }),
+    });
+    const testGuard = guard(project, run.id);
+    assert.equal(testGuard.status, 0, testGuard.stdout);
+    assert.equal(ok(project, ['run', 'stage', run.id, 'docs']), 'stage docs skipped\n');
+
+    assert.match(ok(project, ['run', 'commit', run.id]), /^committed [0-9a-f]{7} files=1/);
+    ok(project, ['run', 'stage', run.id, 'done']);
+
+    const commits = newCommits(project);
+    assert.equal(commits.length, 1, commits.join('\n'));
+    assert.ok(commits[0].startsWith('neat: '), commits[0]);
+    assert.deepEqual(committedFiles(project, 'HEAD'), ['src/a.js']);
+    assertFinished(project, run, 3);
+    const reports = fs.readdirSync(run.dir).filter((f) => /^report-.*\.md$/.test(f)).sort();
+    assert.deepEqual(reports, ['report-explorer.md', 'report-implementer-T1.md', 'report-tester.md']);
+    const statuses = stageStatuses(run);
+    for (const name of ['research', 'review', 'docs']) assert.equal(statuses[name], 'skipped', name);
+    for (const name of ['explore', 'plan', 'implement', 'test']) assert.equal(statuses[name], 'done', name);
   });
 });

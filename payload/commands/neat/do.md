@@ -14,6 +14,7 @@ You are the neat orchestrator for this run. Follow the sections below in order.
 - Before running a command with a `<<'NEAT_EOF'` heredoc, check the text inside it. If any line of it is `NEAT_EOF` (ignoring spaces), do not run the command: for the task, print `task text must not contain a line NEAT_EOF` and stop; for a plan or notes, reword that line first.
 - Every stage gets new workers. Use SendMessage only for the single report fix in the Worker loop.
 - If a helper command fails unexpectedly, show its error lines, run `run stage {id} cancelled` and go to Finish.
+- When `run stage` prints `stage {X} skipped`, skip the rest of that section; a skipped plan also skips Approve.
 - Keep your own messages short. Modes: `gate` (default) asks before implementing, `auto` never asks, `step` asks after every stage.
 
 ## Worker loop
@@ -40,10 +41,10 @@ On success the first line is `id={id} mode={mode} dir={dir}`; keep these values.
 Run `node {{NEAT_BIN}} run stage {id} explore`, then the Worker loop with W = `explorer` and no G.
 
 ## Classify
-From the explorer report rate the task: `trivial` (one small, obvious change), `risky` (security, data loss, concurrency, public interfaces or many files) or `normal`. Run `node {{NEAT_BIN}} run classify {id} {complexity}`; later briefs route from it.
+From the explorer report rate the task: `trivial` (one small, obvious change), `risky` (security, data loss, concurrency, public interfaces or many files) or `normal`. Run `node {{NEAT_BIN}} run classify {id} {complexity}`; later briefs route from it. Then pick the task type: `small-fix`, `feature`, `refactor`, `research` (a question, no edits) or `docs`. Run `node {{NEAT_BIN}} stages {id} --type {type}` and keep the printed `stages ...` line.
 
 ## Plan
-Run `node {{NEAT_BIN}} run stage {id} plan`. Using only the task text and the explorer report, write the plan:
+Run `node {{NEAT_BIN}} run stage {id} plan`. Using only the task text and the explorer report, write the plan, starting with the `stages ...` line:
 
 ```
 node {{NEAT_BIN}} write {id} plan.md --stdin <<'NEAT_EOF'
@@ -51,12 +52,12 @@ node {{NEAT_BIN}} write {id} plan.md --stdin <<'NEAT_EOF'
 NEAT_EOF
 ```
 
-Plan format: each task starts with a heading line, `## T1: {title}` for implementer tasks (T1, T2, ...) or `## D1: {title}` for docs tasks (D1, D2, ...), followed by the lines `worker: implementer` (or `worker: docs`), `owns: {repo-relative paths, comma-separated}` and `do: {clear instructions}`. Give each file to one task where possible and group tightly coupled edits in one task, because tasks owning disjoint files run in parallel. Always include at least one docs task (`README.md` when unsure).
+Plan format: each task starts with a heading line, `## T1: {title}` for implementer tasks (T1, T2, ...) or `## D1: {title}` for docs tasks (D1, D2, ...), followed by the lines `worker: implementer` (or `worker: docs`), `owns: {repo-relative paths, comma-separated}` and `do: {clear instructions}`. Give each file to one task where possible and group tightly coupled edits in one task, because tasks owning disjoint files run in parallel. Include implementer tasks only when the implement stage is selected and docs tasks only when the docs stage is selected (`README.md` when unsure).
 
-Run `node {{NEAT_BIN}} plan check {id}`. On exit 1, fix the plan from the error lines and write it again, at most twice; then `run stage {id} cancelled` and go to Finish. On success keep the line `plan ok tasks={n} implement=[...] docs=[...]`: each bracket is a batch.
+Run `node {{NEAT_BIN}} plan check {id}`. On exit 1, fix the plan from the error lines and write it again, at most twice; then `run stage {id} cancelled` and go to Finish. On success keep the line `plan ok tasks={n} stages=... implement=[...] docs=[...]`: each bracket is a batch.
 
 ## Approve
-gate and step: ask with AskUserQuestion, showing at most 15 lines (task ids, titles, owned files and the batches from plan check), with options Approve / Revise / Cancel.
+gate and step: ask with AskUserQuestion, showing at most 15 lines (the stages, task ids, titles, owned files and the batches from plan check), with options Approve / Revise / Cancel.
 - Revise: ask what to change, rewrite plan.md, run `node {{NEAT_BIN}} plan check {id}` and ask again.
 - Cancel: `run stage {id} cancelled`, go to Finish.
 
@@ -87,7 +88,7 @@ Run `node {{NEAT_BIN}} run stage {id} docs`. For each batch in the `docs=` part,
 Step mode: after the user continues, run `node {{NEAT_BIN}} run commit {id}` and keep its output line.
 
 ## Commit
-gate and auto only (step mode already committed per stage). If the tester Status is done, run `node {{NEAT_BIN}} run commit {id}`. Otherwise auto leaves the changes uncommitted and says so; gate asks with AskUserQuestion with options Commit anyway / Leave uncommitted. Keep the output line (`committed ...`, `commit skip: ...` or `commit refused: ...`).
+gate and auto only (step mode already committed per stage). When the test stage ran and the tester Status is not done, auto leaves the changes uncommitted and says so; gate asks with AskUserQuestion with options Commit anyway / Leave uncommitted. Otherwise run `node {{NEAT_BIN}} run commit {id}` (a run without owned changes prints `commit skip: ...`). Keep the output line (`committed ...`, `commit skip: ...` or `commit refused: ...`).
 
 ## Finish
 Unless the run was cancelled, run `node {{NEAT_BIN}} run stage {id} done`. Then print at most 12 lines:
