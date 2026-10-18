@@ -126,7 +126,42 @@ describe('readUsage', () => {
 
   test('the result never carries other file content', () => {
     const r = usage.readUsage(capture(statusline({ fiveHour: { used_percentage: 10, resets_at: NOW_SEC + 60 } })), NOW);
-    assert.deepEqual(Object.keys(r).sort(), ['ctx', 'fiveHour', 'known', 'sevenDay', 'usage']);
+    assert.deepEqual(Object.keys(r).sort(), ['ctx', 'fiveHour', 'known', 'sessionId', 'sevenDay', 'usage']);
+    const none = usage.readUsage(path.join(dir, 'absent.json'), NOW, { sessionId: 'sess-0000' });
+    assert.deepEqual(Object.keys(none).sort(), ['ctx', 'fiveHour', 'known', 'sessionId', 'sevenDay', 'usage']);
+    assert.equal(none.sessionId, null);
+  });
+
+  test('sessionId is the capture session_id string, else null', () => {
+    assert.equal(usage.readUsage(capture(statusline()), NOW).sessionId, 'sess-0000');
+    for (const bad of [7, null, '', { a: 1 }]) {
+      const r = usage.readUsage(capture({ ...statusline(), session_id: bad }), NOW);
+      assert.equal(r.sessionId, null, JSON.stringify(bad));
+    }
+    const { session_id: _omit, ...noId } = statusline();
+    assert.equal(usage.readUsage(capture(noId), NOW).sessionId, null);
+  });
+
+  test('ctx is unknown for a capture from another session; rate limits still count', () => {
+    const content = statusline({ ctx: 63, fiveHour: { used_percentage: 72, resets_at: NOW_SEC + 3600 } });
+    const file = capture(content);
+    const same = usage.readUsage(file, NOW, { sessionId: 'sess-0000' });
+    assert.deepEqual([same.ctx, same.usage, same.sessionId], [63, 72, 'sess-0000']);
+    const other = usage.readUsage(file, NOW, { sessionId: 'sess-1111' });
+    assert.deepEqual([other.ctx, other.usage, other.known, other.sessionId], [null, 72, true, 'sess-0000']);
+    assert.equal(usage.readUsage(file, NOW, {}).ctx, 63);
+    assert.equal(usage.readUsage(file, NOW, { sessionId: '' }).ctx, 63);
+    assert.equal(usage.readUsage(file, NOW, { sessionId: undefined }).ctx, 63);
+    const { session_id: _omit, ...noId } = content;
+    assert.equal(usage.readUsage(capture(noId), NOW, { sessionId: 'sess-1111' }).ctx, 63);
+  });
+
+  test('ctx is unknown when the capture is older than 15 minutes; rate limits with resets_at still count', () => {
+    const content = statusline({ ctx: 63, fiveHour: { used_percentage: 72, resets_at: NOW_SEC + 3600 } });
+    const fresh = usage.readUsage(capture(content, new Date(NOW.getTime() - 14 * 60 * 1000)), NOW, { sessionId: 'sess-0000' });
+    assert.equal(fresh.ctx, 63);
+    const stale = usage.readUsage(capture(content, new Date(NOW.getTime() - 20 * 60 * 1000)), NOW, { sessionId: 'sess-0000' });
+    assert.deepEqual([stale.ctx, stale.usage, stale.known], [null, 72, true]);
   });
 
   test('a FIFO or a directory at the capture path is unknown and does not block', { skip: process.platform === 'win32' }, () => {

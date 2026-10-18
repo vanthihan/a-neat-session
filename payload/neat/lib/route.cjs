@@ -143,7 +143,7 @@ function routeWorker(root, state, worker, env = process.env, now = new Date(), h
   const profile = cfg.profile;
   const role = roleOf(worker);
   const complexity = COMPLEXITIES.includes(state.complexity) ? state.complexity : DEFAULT_COMPLEXITY;
-  const { usage, ctx } = readUsage(cfg.usage.capturePath, now);
+  const { usage, ctx } = readUsage(cfg.usage.capturePath, now, { sessionId: env.CLAUDE_CODE_SESSION_ID });
   const args = { role, profile, complexity, usage, soft: cfg.thresholds.soft };
   const r = worker === SECOND_REVIEWER ? secondReviewerFor(args) : routeFor(args);
   const hard = usage !== null && usage >= cfg.thresholds.hard;

@@ -90,9 +90,14 @@ describe('effectiveConfig layering', () => {
       'codex.model': 'default',
       'codex.sandboxDefault': 'default',
       'review.maxRounds': 'default',
+      'context.warn': 'default',
+      'context.critical': 'default',
+      'filter.enabled': 'default',
     });
     assert.deepEqual(cfg.codex, { enabled: 'auto', model: null, sandboxDefault: 'workspace-write' });
     assert.deepEqual(cfg.review, { maxRounds: 2 });
+    assert.deepEqual(cfg.context, { warn: 60, critical: 75 });
+    assert.deepEqual(cfg.filter, { enabled: true });
     assert.deepEqual(cfg.files, {
       global: { path: l.globalFile, exists: false },
       project: { path: l.projectFile, exists: false },
@@ -283,6 +288,61 @@ describe('review settings', () => {
   });
 });
 
+describe('context and filter settings', () => {
+  const SAMPLE = { context: { warn: 50, critical: 80 }, filter: { enabled: false } };
+
+  test('both files accept context and filter; the project value wins', () => {
+    const l = layout();
+    writeJson(l.globalFile, SAMPLE);
+    let cfg = l.effective();
+    assert.deepEqual([cfg.context, cfg.filter], [{ warn: 50, critical: 80 }, { enabled: false }]);
+    assert.deepEqual(['context.warn', 'context.critical', 'filter.enabled'].map((k) => cfg.sources[k]),
+      ['global', 'global', 'global']);
+    assert.equal(config.configValue(cfg, 'filter.enabled'), 'false');
+    assert.equal(config.configValue(cfg, 'context.warn'), '50');
+    writeJson(l.projectFile, { context: { warn: 40 }, filter: { enabled: true } });
+    cfg = l.effective();
+    assert.deepEqual([cfg.context, cfg.filter], [{ warn: 40, critical: 80 }, { enabled: true }]);
+    assert.equal(cfg.sources['context.warn'], 'project');
+    assert.equal(cfg.sources['context.critical'], 'global');
+    assert.equal(cfg.sources['filter.enabled'], 'project');
+    const lines = config.configLines(cfg);
+    assert.ok(lines.includes('context.warn=40 (project)'), lines.join('\n'));
+    assert.ok(lines.includes('context.critical=80 (global)'), lines.join('\n'));
+    assert.ok(lines.includes('filter.enabled=true (project)'), lines.join('\n'));
+  });
+
+  test('invalid context and filter values are config errors in either file', () => {
+    const l = layout();
+    for (const file of [l.globalFile, l.projectFile]) {
+      const cases = [
+        [{ context: { warn: '60' } }, 'context.warn must be a number from 0 to 100'],
+        [{ context: { warn: -1 } }, 'context.warn must be a number from 0 to 100'],
+        [{ context: { warn: 101 } }, 'context.warn must be a number from 0 to 100'],
+        [{ context: { critical: null } }, 'context.critical must be a number from 0 to 100'],
+        [{ filter: { enabled: 'no' } }, 'filter.enabled must be true or false'],
+        [{ filter: { enabled: 0 } }, 'filter.enabled must be true or false'],
+        [{ context: { x: 1 } }, "unknown key 'context.x'"],
+        [{ filter: { x: true } }, "unknown key 'filter.x'"],
+        [{ context: 5 }, 'context must be a JSON object'],
+        [{ filter: [] }, 'filter must be a JSON object'],
+      ];
+      for (const [value, reason] of cases) {
+        writeJson(file, value);
+        configError(() => l.effective(), `invalid config ${file}: ${reason}`);
+      }
+      fs.rmSync(file);
+    }
+  });
+
+  test('merged warn above critical is rejected', () => {
+    const l = layout();
+    writeJson(l.globalFile, { context: { critical: 70 } });
+    writeJson(l.projectFile, { context: { warn: 80 } });
+    configError(() => l.effective(), 'invalid config: context.warn (80) must be <= context.critical (70)');
+  });
+});
+
 describe('configLines and configValue', () => {
   test('show lines carry value and source plus both file paths', () => {
     const l = layout();
@@ -297,6 +357,9 @@ describe('configLines and configValue', () => {
       'codex.model=(unset) (default)',
       'codex.sandboxDefault=workspace-write (default)',
       'review.maxRounds=2 (default)',
+      'context.warn=60 (default)',
+      'context.critical=75 (default)',
+      'filter.enabled=true (default)',
       `global=${l.globalFile} (found)`,
       `project=${l.projectFile} (missing)`,
     ]);
@@ -310,7 +373,7 @@ describe('configLines and configValue', () => {
     assert.ok(path.isAbsolute(config.configValue(cfg, 'usage.capturePath')));
     configError(
       () => config.configValue(cfg, 'nope'),
-      "unknown config key 'nope' (use profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault|review.maxRounds)",
+      "unknown config key 'nope' (use profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault|review.maxRounds|context.warn|context.critical|filter.enabled)",
     );
   });
 });
@@ -348,6 +411,9 @@ describe('CLI', () => {
       'codex.model=(unset) (default)',
       'codex.sandboxDefault=workspace-write (default)',
       'review.maxRounds=2 (default)',
+      'context.warn=60 (default)',
+      'context.critical=75 (default)',
+      'filter.enabled=true (default)',
       `global=${path.join(cfgDir, 'neat', 'config.json')} (missing)`,
       `project=${path.join(proj, '.neat', 'config.json')} (missing)`,
     ]);
@@ -361,6 +427,9 @@ describe('CLI', () => {
     assert.equal(neat(['config', 'get', 'codex.model']).stdout, '(unset)\n');
     assert.equal(neat(['config', 'get', 'codex.sandboxDefault']).stdout, 'workspace-write\n');
     assert.equal(neat(['config', 'get', 'review.maxRounds']).stdout, '2\n');
+    assert.equal(neat(['config', 'get', 'context.warn']).stdout, '60\n');
+    assert.equal(neat(['config', 'get', 'context.critical']).stdout, '75\n');
+    assert.equal(neat(['config', 'get', 'filter.enabled']).stdout, 'true\n');
     const bad = neat(['config', 'get', 'nope']);
     assert.equal(bad.status, 2);
     assert.match(bad.stderr, /unknown config key 'nope'/);

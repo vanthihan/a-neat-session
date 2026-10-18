@@ -19,6 +19,8 @@ const DEFAULTS = Object.freeze({
   usage: Object.freeze({ capturePath: null }),
   codex: Object.freeze({ enabled: 'auto', model: null, sandboxDefault: 'workspace-write' }),
   review: Object.freeze({ maxRounds: 2 }),
+  context: Object.freeze({ warn: 60, critical: 75 }),
+  filter: Object.freeze({ enabled: true }),
 });
 
 const CODEX_ENABLED = Object.freeze(['auto', 'on', 'off']);
@@ -33,11 +35,14 @@ const SCHEMA = Object.freeze({
   usage: Object.freeze(['capturePath']),
   codex: Object.freeze(['enabled', 'model', 'sandboxDefault']),
   review: Object.freeze(['maxRounds']),
+  context: Object.freeze(['warn', 'critical']),
+  filter: Object.freeze(['enabled']),
 });
 
 const KEYS = Object.freeze([
   'profile', 'thresholds.soft', 'thresholds.hard', 'usage.capturePath',
   'codex.enabled', 'codex.model', 'codex.sandboxDefault', 'review.maxRounds',
+  'context.warn', 'context.critical', 'filter.enabled',
 ]);
 
 // Local copy of the installer's expandTilde: the payload is installed on its
@@ -70,9 +75,9 @@ function isObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
-function checkThreshold(name, value, fail) {
+function checkPercent(key, value, fail) {
   const ok = typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100;
-  if (!ok) fail(`thresholds.${name} must be a number from 0 to 100`);
+  if (!ok) fail(`${key} must be a number from 0 to 100`);
 }
 
 function checkSection(name, value, fail) {
@@ -118,6 +123,20 @@ function validateReview(value, fail) {
   return { maxRounds: n };
 }
 
+// Allowed in both scopes: context thresholds only add warnings and the filter
+// switch only turns a feature off.
+function validateContext(value, fail) {
+  checkSection('context', value, fail);
+  for (const key of Object.keys(value)) checkPercent(`context.${key}`, value[key], fail);
+  return { ...value };
+}
+
+function validateFilter(value, fail) {
+  checkSection('filter', value, fail);
+  if ('enabled' in value && typeof value.enabled !== 'boolean') fail('filter.enabled must be true or false');
+  return { ...value };
+}
+
 // Validates one parsed file; returns a normalised copy (capturePath expanded).
 function validate(data, { scope, home, fail }) {
   if (!isObject(data)) fail('must be a JSON object');
@@ -133,7 +152,7 @@ function validate(data, { scope, home, fail }) {
     checkSection('thresholds', data.thresholds, fail);
     out.thresholds = {};
     for (const key of Object.keys(data.thresholds)) {
-      checkThreshold(key, data.thresholds[key], fail);
+      checkPercent(`thresholds.${key}`, data.thresholds[key], fail);
       out.thresholds[key] = data.thresholds[key];
     }
   }
@@ -150,6 +169,8 @@ function validate(data, { scope, home, fail }) {
   }
   if ('codex' in data) out.codex = validateCodex(data.codex, scope, fail);
   if ('review' in data) out.review = validateReview(data.review, fail);
+  if ('context' in data) out.context = validateContext(data.context, fail);
+  if ('filter' in data) out.filter = validateFilter(data.filter, fail);
   return out;
 }
 
@@ -190,7 +211,7 @@ function layer(cfg, sources, data, source) {
     cfg.usage.capturePath = data.usage.capturePath;
     sources['usage.capturePath'] = source;
   }
-  for (const section of ['codex', 'review']) {
+  for (const section of ['codex', 'review', 'context', 'filter']) {
     for (const key of SCHEMA[section]) {
       if (data[section] && data[section][key] !== undefined) {
         cfg[section][key] = data[section][key];
@@ -210,6 +231,8 @@ function effectiveConfig({ root, env = process.env, home = os.homedir(), state =
     usage: { capturePath: defaultCapturePath(env, home) },
     codex: { ...DEFAULTS.codex },
     review: { ...DEFAULTS.review },
+    context: { ...DEFAULTS.context },
+    filter: { ...DEFAULTS.filter },
   };
   const sources = Object.fromEntries(KEYS.map((k) => [k, 'default']));
   layer(cfg, sources, readConfigFile(globalFile, { scope: 'global', home }), 'global');
@@ -218,6 +241,10 @@ function effectiveConfig({ root, env = process.env, home = os.homedir(), state =
   const { soft, hard } = cfg.thresholds;
   if (soft > hard) {
     throw new UsageError(`invalid config: thresholds.soft (${soft}) must be <= thresholds.hard (${hard})`);
+  }
+  const { warn, critical } = cfg.context;
+  if (warn > critical) {
+    throw new UsageError(`invalid config: context.warn (${warn}) must be <= context.critical (${critical})`);
   }
   return {
     ...cfg,
@@ -238,6 +265,9 @@ function configValue(cfg, key) {
   if (key === 'codex.model') return cfg.codex.model || '(unset)';
   if (key === 'codex.sandboxDefault') return cfg.codex.sandboxDefault;
   if (key === 'review.maxRounds') return String(cfg.review.maxRounds);
+  if (key === 'context.warn') return String(cfg.context.warn);
+  if (key === 'context.critical') return String(cfg.context.critical);
+  if (key === 'filter.enabled') return String(cfg.filter.enabled);
   throw new UsageError(`unknown config key '${key}' (use ${KEYS.join('|')})`);
 }
 

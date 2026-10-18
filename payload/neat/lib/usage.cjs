@@ -2,14 +2,15 @@
 
 // Account usage from the Claude Code status line capture.
 // The reader extracts only numeric fields (rate-limit windows and context
-// percentage) and never throws: a missing, unreadable, malformed or stale
+// percentage) plus the session id string, and never throws: a missing, unreadable, malformed or stale
 // capture is simply "unknown". The writer is used by `neat usage-capture`.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-// A window without resets_at counts only while the file is this fresh.
+// A window without resets_at, and the context percentage, count only while
+// the file is this fresh.
 const MTIME_WINDOW_MS = 15 * 60 * 1000;
 // Captures larger than this are ignored (a real one is a few KB).
 const MAX_CAPTURE_BYTES = 1024 * 1024;
@@ -66,21 +67,37 @@ function readCapture(file) {
   }
 }
 
-// { known, usage, fiveHour, sevenDay, ctx } where usage is the maximum valid
-// window. `now` is a Date (the run clock).
-function readUsage(file, now = new Date()) {
-  const unknown = { known: false, usage: null, fiveHour: null, sevenDay: null, ctx: null };
+function idOrNull(v) {
+  return typeof v === 'string' && v !== '' ? v : null;
+}
+
+// The capture is one global file written by whichever session refreshed its
+// status line last, so the context percentage counts only while the file is
+// fresh and when it does not name another session than `sessionId`.
+function contextPercent(data, fresh, sessionId, captureId) {
+  if (!fresh) return null;
+  const own = idOrNull(sessionId);
+  if (own !== null && captureId !== null && own !== captureId) return null;
+  return isObject(data.context_window) ? percentOrNull(data.context_window.used_percentage) : null;
+}
+
+// { known, usage, fiveHour, sevenDay, ctx, sessionId } where usage is the
+// maximum valid window and sessionId the capture's session_id. `now` is a
+// Date (the run clock); `sessionId` is the reading session's id, if known.
+function readUsage(file, now = new Date(), { sessionId = null } = {}) {
+  const unknown = { known: false, usage: null, fiveHour: null, sevenDay: null, ctx: null, sessionId: null };
   const capture = readCapture(file);
   if (!capture) return unknown;
   const { data, mtimeMs } = capture;
   const nowMs = now.getTime();
-  const ctx = isObject(data.context_window) ? percentOrNull(data.context_window.used_percentage) : null;
+  const captureId = idOrNull(data.session_id);
   const limits = isObject(data.rate_limits) ? data.rate_limits : {};
   const fresh = nowMs - mtimeMs <= MTIME_WINDOW_MS;
+  const ctx = contextPercent(data, fresh, sessionId, captureId);
   const [fiveHour, sevenDay] = WINDOWS.map((w) => windowPercent(limits[w], nowMs / 1000, fresh));
   const valid = [fiveHour, sevenDay].filter((v) => v !== null);
   const usage = valid.length > 0 ? Math.max(...valid) : null;
-  return { known: usage !== null, usage, fiveHour, sevenDay, ctx };
+  return { known: usage !== null, usage, fiveHour, sevenDay, ctx, sessionId: captureId };
 }
 
 // `72%`, `23.5%` (at most one decimal) or `unknown`.

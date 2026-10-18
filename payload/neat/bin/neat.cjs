@@ -36,6 +36,7 @@ const guide = require(path.join(LIB, 'guide.cjs'));
 const jobs = require(path.join(LIB, 'jobs.cjs'));
 const reviewMerge = require(path.join(LIB, 'review-merge.cjs'));
 const nextStepLib = require(path.join(LIB, 'next-step.cjs'));
+const { contextLineFor } = require(path.join(LIB, 'context.cjs'));
 
 const MAX_ERROR_LINES = 5;
 const MAX_MERGE_TOP = 5;
@@ -58,7 +59,7 @@ const HELP = [
   'neat report check <file>',
   'neat review merge <run-id>',
   'neat config show [<run-id>]',
-  'neat config get <profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault|review.maxRounds>',
+  'neat config get <profile|thresholds.soft|thresholds.hard|usage.capturePath|codex.enabled|codex.model|codex.sandboxDefault|review.maxRounds|context.warn|context.critical|filter.enabled>',
   'neat status [--json]',
   'neat usage-capture [--path <file>] [--quiet]',
   ...codexCli.HELP_LINES,
@@ -103,6 +104,16 @@ function cmdRunNew(args) {
   return 0;
 }
 
+// Arguments for contextLineFor, which returns this session's `context:`
+// warning line or null and never throws.
+function contextArgs(root, state) {
+  return { root, state, env: process.env, now: runState.currentTime(process.env) };
+}
+
+function outIf(line) {
+  if (line) out(line);
+}
+
 function cmdRunStage(args) {
   if (args.length !== 2) throw new UsageError('usage: neat run stage <run-id> <stage>');
   const [id, stage] = args;
@@ -110,10 +121,11 @@ function cmdRunStage(args) {
   const state = runState.loadRun(root, id);
   if (stages.isSkipped(state, stage)) {
     out(`stage ${stage} skipped`);
-    return 0;
+  } else {
+    runState.saveRun(root, runState.setStage(state, stage), runState.currentTime(process.env));
+    out(`stage ${stage}`);
   }
-  runState.saveRun(root, runState.setStage(state, stage), runState.currentTime(process.env));
-  out(`stage ${stage}`);
+  outIf(contextLineFor(contextArgs(root, state)));
   return 0;
 }
 
@@ -191,6 +203,7 @@ function cmdRoute(args) {
   const now = runState.currentTime(process.env);
   const workers = target === '--all' ? route.ROLES : [target];
   workers.forEach((w) => out(route.formatRoute(route.routeWorker(root, state, w, process.env, now))));
+  outIf(contextLineFor(contextArgs(root, state)));
   route.envNotes(process.env).forEach((line) => out(line));
   return 0;
 }
@@ -355,6 +368,7 @@ function cmdBrief(args) {
   const result = brief.writeBrief(root, id, worker, notes, runState.currentTime(process.env), process.env, opts);
   out(result.file);
   out(route.formatRoute(result.route));
+  outIf(contextLineFor(contextArgs(root, { id })));
   return 0;
 }
 
