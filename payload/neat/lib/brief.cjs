@@ -17,6 +17,8 @@ const NO_OWNED_ROLES = Object.freeze([...READ_ONLY_ROLES, 'researcher']);
 const MAX_WEB_SEARCHES = 8;
 const CONTEXT_FILES = Object.freeze(['plan.md', 'report-explorer.md', 'report-researcher.md', 'research-notes.md']);
 const PLAN_WORKER = /^(implementer-T|docs-D)(\d+)$/;
+// Each reviewer keeps its own review file so two reviewers never overwrite each other.
+const REVIEW_FILES = Object.freeze({ reviewer: 'review.md', 'reviewer-2': 'review-2.md' });
 
 function planTask(state, worker) {
   const m = worker.match(PLAN_WORKER);
@@ -46,7 +48,7 @@ function headerLines(state, worker, ctx) {
   if ((role === 'reviewer' || role === 'docs') && ctx.exists(file('diff.patch'))) {
     lines.push(`Diff: ${file('diff.patch')}`);
   }
-  if (role === 'reviewer') lines.push(`Review file: ${file('review.md')}`);
+  if (role === 'reviewer') lines.push(`Review file: ${file(REVIEW_FILES[worker])}`);
   if (role === 'tester') lines.push(`Test log: ${file('test-log.txt')}`);
   return lines;
 }
@@ -159,7 +161,7 @@ function helperPath() {
 // effort, and returns { file, route } (file is the absolute brief path).
 function writeBrief(root, id, worker, notes, now, env = process.env) {
   if (typeof worker !== 'string' || !runState.WORKER_NAME.test(worker)) {
-    throw new UsageError(`invalid worker name '${worker}' (use explorer|researcher|reviewer|tester|implementer-T<n>|docs-D<n>)`);
+    throw new UsageError(`invalid worker name '${worker}' (use explorer|researcher|reviewer|reviewer-2|tester|implementer-T<n>|docs-D<n>)`);
   }
   const state = runState.loadRun(root, id);
   const route = routeWorker(root, state, worker, env, now); // config errors stop here, before any write

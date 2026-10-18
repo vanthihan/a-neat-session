@@ -9,7 +9,7 @@ const protect = require('./protect.cjs');
 
 const PIPELINE = Object.freeze(['explore', 'research', 'plan', 'implement', 'review', 'test', 'docs']);
 const STAGES = Object.freeze([...PIPELINE, 'done', 'cancelled']);
-const WORKER_NAME = /^(explorer|researcher|reviewer|tester|implementer-T\d+|docs-D\d+)$/;
+const WORKER_NAME = /^(explorer|researcher|reviewer|reviewer-2|tester|implementer-T\d+|docs-D\d+)$/;
 const WORKER_STATUSES = Object.freeze(['running', 'done', 'failed', 'report-invalid']);
 const COMPLEXITIES = Object.freeze(['trivial', 'normal', 'risky']);
 const RUN_ID = /^\d{8}-\d{6}-[a-z0-9-]{1,48}$/;
@@ -192,7 +192,7 @@ function setComplexity(state, level) {
 // entry are kept; `extra` (for example { model, effort }) is merged last.
 function setWorker(state, name, status, report, extra = {}) {
   if (typeof name !== 'string' || !WORKER_NAME.test(name)) {
-    throw new UsageError(`invalid worker name '${name}' (use explorer|researcher|reviewer|tester|implementer-T<n>|docs-D<n>)`);
+    throw new UsageError(`invalid worker name '${name}' (use explorer|researcher|reviewer|reviewer-2|tester|implementer-T<n>|docs-D<n>)`);
   }
   assertOneOf('worker status', status, WORKER_STATUSES);
   const workers = Array.isArray(state.workers) ? state.workers : [];

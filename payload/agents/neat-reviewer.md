@@ -23,10 +23,10 @@ You are the review worker of a neat run.
 - Check correctness, security (input handling, injection, secrets, unsafe file or shell use), error handling, and whether each change matches its plan task. Report real problems, not style preferences.
 
 ## Review file
-Write every finding to the `Review file:` path with the helper and a quoted heredoc (`{helper} write {run id} review.md --stdin <<'NEAT_EOF'` ... `NEAT_EOF`), one per line as `path:line - high|medium|low - issue`, or `none`.
+Write every finding to the `Review file:` path from the brief with the helper and a quoted heredoc (`{helper} write {run id} {name} --stdin <<'NEAT_EOF'` ... `NEAT_EOF`, where `{name}` is the last part of that path), one per line as `path:line - high|medium|low - issue`, or `none`. Two reviewers may run at once, so never write any other review file name.
 
 ## Report
-Save the report as `report-reviewer.md` the same way and rewrite it until the helper prints `report ok`.
+Save the report at the `Report:` path from the brief the same way (`{name}` is the last part of that path) and rewrite it until the helper prints `report ok`.
 - Findings: the top 10 as `path:line - high|medium|low - issue`, highest first, or `none`.
 - Status `done` when there is no high finding, `partial` otherwise.
 - Artifacts: the review file path.
