@@ -13,7 +13,13 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SCRUBBED_ENV = [
   'CLAUDE_PROJECT_DIR', 'CLAUDE_CONFIG_DIR', 'NEAT_PROJECT_DIR', 'NEAT_NOW',
   'CLAUDE_CODE_EFFORT_LEVEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE',
+  'NEAT_CODEX_BIN', 'TMUX', 'TMUX_PANE',
 ];
+
+// Children never find the real codex: NEAT_CODEX_BIN defaults to `none`
+// (absent) unless a test points it at the fake shim.
+const NO_CODEX = 'none';
+const FAKE_CODEX = path.join(__dirname, 'fake-codex.cjs');
 
 // One empty CLAUDE_CONFIG_DIR per test process, created on first use and
 // removed on exit, so helper children never read the developer's real
@@ -29,11 +35,13 @@ function defaultConfigDir() {
 }
 
 // Inherited env minus SCRUBBED_ENV, plus CLAUDE_CONFIG_DIR pointing at an
-// empty temp dir unless `overrides` names CLAUDE_CONFIG_DIR. An override whose
-// value is undefined removes that variable.
+// empty temp dir unless `overrides` names CLAUDE_CONFIG_DIR, and
+// NEAT_CODEX_BIN=none unless `overrides` names it. An override whose value is
+// undefined removes that variable.
 function childEnv(overrides = {}) {
   const env = { ...process.env };
   for (const key of SCRUBBED_ENV) delete env[key];
+  env.NEAT_CODEX_BIN = NO_CODEX;
   if (!Object.prototype.hasOwnProperty.call(overrides, 'CLAUDE_CONFIG_DIR')) {
     env.CLAUDE_CONFIG_DIR = defaultConfigDir();
   }
@@ -61,4 +69,12 @@ function removeDir(dir) {
   if (dir) fs.rmSync(dir, { recursive: true, force: true });
 }
 
-module.exports = { REPO_ROOT, childEnv, runNode, makeTempDir, removeDir };
+// Copies the fake codex shim to <dir>/codex (mode 0755); returns its absolute path.
+function installFakeCodex(dir) {
+  const target = path.join(path.resolve(dir), 'codex');
+  fs.copyFileSync(FAKE_CODEX, target);
+  fs.chmodSync(target, 0o755);
+  return target;
+}
+
+module.exports = { REPO_ROOT, childEnv, runNode, makeTempDir, removeDir, installFakeCodex };

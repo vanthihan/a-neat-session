@@ -63,7 +63,7 @@ test('--profile budget: state keeps the profile and the explorer brief prints th
   assert.equal(readState(dir).profile, 'budget');
   assert.equal(
     briefRoute(id, 'explorer'),
-    'route worker=explorer model=haiku effort=low profile=budget complexity=normal usage=unknown stepdown=no hard=no ctx=unknown',
+    'route worker=explorer model=haiku effort=low profile=budget complexity=normal usage=unknown stepdown=no hard=no ctx=unknown target=claude action=run',
   );
   const w = workerEntry(dir, 'explorer');
   assert.equal(w.status, 'running');
@@ -143,7 +143,7 @@ test('a capture at five_hour 80 steps the reviewer down to sonnet', () => {
     const { id } = newRun('usage step-down\n', runEnv);
     const line = briefRoute(id, 'reviewer', runEnv);
     assert.match(line, / model=sonnet /);
-    assert.match(line, / usage=80% stepdown=yes hard=no ctx=20%$/);
+    assert.match(line, / usage=80% stepdown=yes hard=no ctx=20% target=claude action=run$/);
   } finally {
     removeDir(cfg);
   }

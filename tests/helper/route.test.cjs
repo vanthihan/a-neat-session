@@ -98,7 +98,7 @@ describe('routing table', () => {
       worker: 'implementer-T1', model: 'sonnet', effort: 'medium', profile: 'adaptive',
       complexity: 'normal', usage: 72, stepdown: true, hard: false, ctx: null,
     });
-    assert.equal(line, 'route worker=implementer-T1 model=sonnet effort=medium profile=adaptive complexity=normal usage=72% stepdown=yes hard=no ctx=unknown');
+    assert.equal(line, 'route worker=implementer-T1 model=sonnet effort=medium profile=adaptive complexity=normal usage=72% stepdown=yes hard=no ctx=unknown target=claude action=run');
   });
 
   test('envNotes names the env vars that override per-call values', () => {
@@ -173,7 +173,7 @@ describe('CLI', () => {
     assert.equal(neat(['run', 'classify', id, 'trivial']).status, 0);
     const res = neat(['route', id, 'implementer-T1']);
     assert.equal(res.status, 0, res.stderr);
-    assert.equal(res.stdout, 'route worker=implementer-T1 model=haiku effort=low profile=adaptive complexity=trivial usage=unknown stepdown=no hard=no ctx=unknown\n');
+    assert.equal(res.stdout, 'route worker=implementer-T1 model=haiku effort=low profile=adaptive complexity=trivial usage=unknown stepdown=no hard=no ctx=unknown target=claude action=run\n');
   });
 
   test('run classify with an invalid level exits 2', () => {
@@ -216,7 +216,7 @@ describe('routeWorker usage step-down', () => {
   before(() => {
     root = makeTempDir('neat-route-usage-root-');
     cfgDir = makeTempDir('neat-route-usage-cfg-');
-    env = { CLAUDE_CONFIG_DIR: cfgDir };
+    env = { CLAUDE_CONFIG_DIR: cfgDir, NEAT_CODEX_BIN: 'none' };
     fs.mkdirSync(path.join(cfgDir, 'neat'));
   });
 
@@ -245,15 +245,15 @@ describe('routeWorker usage step-down', () => {
     setGlobal(null);
     setCapture(72, 33);
     assert.equal(line('implementer-T1'),
-      'route worker=implementer-T1 model=haiku effort=medium profile=adaptive complexity=normal usage=72% stepdown=yes hard=no ctx=33%');
-    assert.match(line('reviewer'), /^route worker=reviewer model=sonnet effort=medium .* usage=72% stepdown=yes hard=no ctx=33%$/);
+      'route worker=implementer-T1 model=haiku effort=medium profile=adaptive complexity=normal usage=72% stepdown=yes hard=no ctx=33% target=claude action=run');
+    assert.match(line('reviewer'), /^route worker=reviewer model=sonnet effort=medium .* usage=72% stepdown=yes hard=no ctx=33% target=claude action=run$/);
     assert.match(line('explorer'), /^route worker=explorer model=haiku effort=medium .* stepdown=yes /);
   });
 
   test('usage exactly at soft steps down; one below does not', () => {
     setGlobal(null);
     setCapture(70);
-    assert.match(line('reviewer'), / model=sonnet .* usage=70% stepdown=yes .* ctx=unknown$/);
+    assert.match(line('reviewer'), / model=sonnet .* usage=70% stepdown=yes .* ctx=unknown target=claude action=run$/);
     setCapture(69);
     assert.match(line('reviewer'), / model=opus .* usage=69% stepdown=no /);
   });
@@ -274,7 +274,7 @@ describe('routeWorker usage step-down', () => {
   test('no capture gives usage=unknown and no step-down', () => {
     setGlobal(null);
     fs.rmSync(path.join(cfgDir, 'neat', 'usage.json'), { force: true });
-    assert.match(line('reviewer'), / model=opus .* usage=unknown stepdown=no hard=no ctx=unknown$/);
+    assert.match(line('reviewer'), / model=opus .* usage=unknown stepdown=no hard=no ctx=unknown target=claude action=run$/);
   });
 
   test('global thresholds.soft 50 makes usage 55 step down', () => {
