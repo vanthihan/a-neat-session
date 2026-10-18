@@ -11,6 +11,8 @@ const gitLib = require('./git.cjs');
 const LITERAL = '--literal-pathspecs';
 const MAX_SUBJECT = 60;
 const SHORT = 7;
+const MAX_NOTE_NAMES = 5;
+const UNTRACKED = '??';
 
 function short(sha) {
   return sha ? sha.slice(0, SHORT) : 'none';
@@ -49,6 +51,21 @@ function violationText(file, taskIds) {
     : `${file} changed during a read-only stage`;
 }
 
+// IN-11: during the test stage (read-only), paths whose every new porcelain
+// entry is untracked are files the test run generated (coverage, snapshots,
+// caches). Tracked edits, deletions and index changes stay violations.
+function generatedPaths(entries, testStage) {
+  if (!testStage) return [];
+  const paths = [...new Set(entries.map((e) => e.path))];
+  return paths.filter((p) => entries.every((e) => e.path !== p || e.xy === UNTRACKED));
+}
+
+function generatedNote(paths) {
+  const shown = paths.slice(0, MAX_NOTE_NAMES).join(', ');
+  const more = paths.length > MAX_NOTE_NAMES ? ` (+${paths.length - MAX_NOTE_NAMES} more)` : '';
+  return `note: test created ${paths.length} untracked files (not committed): ${shown}${more}`;
+}
+
 function hashesOf(state) {
   return state.hashes && typeof state.hashes === 'object' ? state.hashes : {};
 }
@@ -64,18 +81,23 @@ function touchedPaths(known, before, current) {
 // whose content changed since the last guard against the files owned by
 // `taskIds` (none = read-only stage). A batch is checked against the union of
 // its tasks' files. A guarded change that a non-owner edits again moves from
-// `changed` to `unowned`, so `commitRun` never commits it. Records results in state.json.
+// `changed` to `unowned`, so `commitRun` never commits it. Untracked files new
+// during the test stage become `generated`: noted, known to later guards and
+// never committed. Records results in state.json.
 function guardRun(root, id, taskIds = [], now) {
   const state = runState.loadRun(root, id);
   if (!gitLib.isGitRepo(root)) return { ok: true, lines: ['guard skip: not a git repository'] };
   const allowed = new Set(union(tasksById(state, taskIds).map((t) => t.owns)));
   const dirty = list(state, 'dirtyAtStart');
   const changed = list(state, 'changed');
-  const known = new Set([...dirty, ...changed, ...list(state, 'unowned')]);
+  const prevGenerated = list(state, 'generated');
+  const known = new Set([...dirty, ...changed, ...list(state, 'unowned'), ...prevGenerated]);
   const before = hashesOf(state);
   const current = gitLib.fingerprints(root, [...known]);
   const touched = touchedPaths(known, before, current);
-  const fresh = gitLib.porcelainPaths(root).filter((p) => !known.has(p));
+  const freshEntries = gitLib.porcelainEntries(root).filter((e) => !known.has(e.path));
+  const generated = generatedPaths(freshEntries, taskIds.length === 0 && state.stage === 'test');
+  const fresh = union([freshEntries.map((e) => e.path)]).filter((p) => !generated.includes(p));
   const messages = [];
   const head = headViolation(root, state);
   if (head) messages.push(head);
@@ -89,12 +111,14 @@ function guardRun(root, id, taskIds = [], now) {
     ...state,
     changed: union([changed.filter((p) => !tainted.has(p)), owned]),
     unowned: union([list(state, 'unowned'), foreign, [...tainted]]),
-    hashes: { ...before, ...current, ...gitLib.fingerprints(root, fresh) },
+    generated: union([prevGenerated, generated]),
+    hashes: { ...before, ...current, ...gitLib.fingerprints(root, [...fresh, ...generated]) },
     violations: [...list(state, 'violations'), ...messages.map((message) => ({ stage: state.stage, message, at }))],
   };
   runState.saveRun(root, next, now);
   const notes = [...allowed].filter((p) => dirty.includes(p))
     .map((p) => `note: ${p} was modified before the run; neat will not commit it`);
+  if (generated.length > 0) notes.push(generatedNote(generated));
   const lines = [...messages.map((m) => `guard violation: ${m}`), ...notes];
   if (messages.length === 0) lines.push(`guard ok new=${owned.length}`);
   return { ok: messages.length === 0, lines };

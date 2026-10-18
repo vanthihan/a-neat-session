@@ -417,3 +417,124 @@ test('file names with spaces, $(x) and glob characters are handled literally', {
   assert.ok(!fs.existsSync(path.join(dir, 'x')));
   assert.match(git(dir, ['status', '--porcelain']), /gx\.js/);
 });
+
+// ---------- IN-11: files generated during the test stage ----------
+
+test('porcelainEntries returns XY codes, untracked as ??, rename sources and no .neat/', () => {
+  const dir = makeRepo();
+  write(dir, 'sub/new.js', 'x\n');
+  write(dir, '.neat/runs/x/state.json', '{}');
+  git(dir, ['mv', 'README.md', 'DOCS.md']);
+  assert.deepEqual(gitLib.porcelainEntries(dir), [
+    { xy: 'R ', path: 'DOCS.md' },
+    { xy: 'R ', path: 'README.md' },
+    { xy: ' M', path: 'p.txt' },
+    { xy: '??', path: 'sub/new.js' },
+  ]);
+  assert.deepEqual(gitLib.porcelainPaths(dir), ['DOCS.md', 'README.md', 'p.txt', 'sub/new.js']);
+});
+
+test('porcelainEntries maps paths relative to a subdirectory project root', () => {
+  const dir = makeRepo();
+  write(dir, 'pkg/x.js', 'x\n');
+  write(dir, 'top.js', 'y\n');
+  const sub = path.join(dir, 'pkg');
+  assert.deepEqual(gitLib.porcelainEntries(sub), [
+    { xy: '??', path: '../top.js' },
+    { xy: ' M', path: '../p.txt' },
+    { xy: '??', path: 'x.js' },
+  ].sort((a, b) => (a.path < b.path ? -1 : 1)));
+  assert.deepEqual(gitLib.porcelainPaths(sub), ['../p.txt', '../top.js', 'x.js']);
+});
+
+function testStageRun(dir) {
+  const run = plannedRun(dir);
+  assert.equal(neat(dir, ['run', 'stage', run.id, 'test']).status, 0);
+  return run;
+}
+
+test('test stage: a new untracked file becomes generated, noted and not a violation', () => {
+  const dir = makeRepo();
+  const run = testStageRun(dir);
+  write(dir, 'coverage/lcov.info', 'TN:\n');
+  const res = neat(dir, ['run', 'guard', run.id]);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  assert.match(res.stdout, /^note: test created 1 untracked files \(not committed\): coverage\/lcov\.info$/m);
+  assert.match(res.stdout, /^guard ok new=0$/m);
+  const state = stateOf(run);
+  assert.deepEqual(state.generated, ['coverage/lcov.info']);
+  assert.deepEqual(state.violations, []);
+  assert.deepEqual(state.unowned, []);
+  assert.deepEqual(state.changed, []);
+});
+
+test('test stage: the generated note names five files and counts the rest', () => {
+  const dir = makeRepo();
+  const run = testStageRun(dir);
+  for (let i = 1; i <= 7; i += 1) write(dir, `out/f${i}.txt`, `${i}\n`);
+  const res = neat(dir, ['run', 'guard', run.id]);
+  assert.equal(res.status, 0, res.stdout);
+  const names = [1, 2, 3, 4, 5].map((i) => `out/f${i}.txt`).join(', ');
+  assert.ok(res.stdout.split('\n').includes(`note: test created 7 untracked files (not committed): ${names} (+2 more)`), res.stdout);
+  assert.equal(stateOf(run).generated.length, 7);
+});
+
+test('test stage: tracked edits and deletions stay violations', () => {
+  const dir = makeRepo();
+  let run = testStageRun(dir);
+  write(dir, 'a.js', 'edited by the tester\n');
+  let res = neat(dir, ['run', 'guard', run.id]);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /^guard violation: a\.js changed during a read-only stage$/m);
+
+  const dir2 = makeRepo();
+  run = testStageRun(dir2);
+  fs.rmSync(path.join(dir2, 'README.md'));
+  res = neat(dir2, ['run', 'guard', run.id]);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /^guard violation: README\.md changed during a read-only stage$/m);
+  assert.deepEqual(stateOf(run).generated, []);
+});
+
+test('test stage: a tracked file removed from the index and left untracked is a violation', () => {
+  const dir = makeRepo();
+  const run = testStageRun(dir);
+  git(dir, ['rm', '-q', '--cached', 'a.js']);
+  const res = neat(dir, ['run', 'guard', run.id]);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /^guard violation: a\.js changed during a read-only stage$/m);
+});
+
+test('review stage: a new untracked file is still a violation', () => {
+  const dir = makeRepo();
+  const run = plannedRun(dir);
+  neat(dir, ['run', 'stage', run.id, 'review']);
+  write(dir, 'coverage/lcov.info', 'TN:\n');
+  const res = neat(dir, ['run', 'guard', run.id]);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /^guard violation: coverage\/lcov\.info changed during a read-only stage$/m);
+});
+
+test('later guards ignore generated files and commit leaves them untracked', () => {
+  const dir = makeRepo();
+  const run = plannedRun(dir);
+  neat(dir, ['run', 'stage', run.id, 'implement']);
+  write(dir, 'a.js', 'two\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  neat(dir, ['run', 'stage', run.id, 'test']);
+  write(dir, 'coverage/lcov.info', 'TN:\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id]).status, 0);
+
+  neat(dir, ['run', 'stage', run.id, 'docs']);
+  write(dir, 'README.md', '# r\n\nmore\n');
+  const res = neat(dir, ['run', 'guard', run.id, '--tasks', 'D1']);
+  assert.equal(res.status, 0, res.stdout);
+  assert.match(res.stdout, /^guard ok new=1$/m);
+  assert.ok(!res.stdout.includes('coverage'), res.stdout);
+
+  const commit = neat(dir, ['run', 'commit', run.id]);
+  assert.match(commit.stdout, /^committed [0-9a-f]{7} files=2$/m);
+  const files = git(dir, ['show', '--name-only', '--format=', 'HEAD']).trim().split('\n').sort();
+  assert.deepEqual(files, ['README.md', 'a.js']);
+  assert.match(git(dir, ['status', '--porcelain']), /^\?\? coverage\/$/m);
+});

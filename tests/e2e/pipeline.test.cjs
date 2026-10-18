@@ -223,9 +223,9 @@ function committedFiles(project, rev) {
   return git(project.dir, ['show', '--name-only', '--format=', rev]).trim().split('\n').sort();
 }
 
-function assertFinished(project, run, reportCount = 6) {
+function assertFinished(project, run, reportCount = 6, untracked = []) {
   const porcelain = git(project.dir, ['status', '--porcelain']).split('\n').filter(Boolean);
-  assert.deepEqual(porcelain.filter((l) => l !== '?? .neat/'), []);
+  assert.deepEqual(porcelain.filter((l) => l !== '?? .neat/'), untracked);
   const runs = JSON.parse(ok(project, ['status', '--json']));
   const entry = runs.find((r) => r.id === run.id);
   assert.ok(entry, 'run missing from status --json');
@@ -348,11 +348,16 @@ describe('gate mode small fix: only explore, plan, implement and test run', () =
     assert.equal(ok(project, ['run', 'stage', run.id, 'review']), 'stage review skipped\n');
     ok(project, ['run', 'stage', run.id, 'test']);
     runWorker(project, run.id, 'tester', {
-      work: () => ok(project, ['write', run.id, 'test-log.txt', '--stdin'], 'all tests passed\n'),
+      work: () => {
+        ok(project, ['write', run.id, 'test-log.txt', '--stdin'], 'all tests passed\n');
+        write(project.dir, 'coverage/lcov.info', 'TN:\n'); // the test run leaves a report behind
+      },
       reportText: report({ artifacts: '- test-log.txt' }),
     });
     const testGuard = guard(project, run.id);
     assert.equal(testGuard.status, 0, testGuard.stdout);
+    assert.match(testGuard.stdout, /^note: test created 1 untracked files \(not committed\): coverage\/lcov\.info$/m);
+    assert.match(testGuard.stdout, /^guard ok new=0$/m);
     assert.equal(ok(project, ['run', 'stage', run.id, 'docs']), 'stage docs skipped\n');
 
     assert.match(ok(project, ['run', 'commit', run.id]), /^committed [0-9a-f]{7} files=1/);
@@ -362,7 +367,7 @@ describe('gate mode small fix: only explore, plan, implement and test run', () =
     assert.equal(commits.length, 1, commits.join('\n'));
     assert.ok(commits[0].startsWith('neat: '), commits[0]);
     assert.deepEqual(committedFiles(project, 'HEAD'), ['src/a.js']);
-    assertFinished(project, run, 3);
+    assertFinished(project, run, 3, ['?? coverage/']);
     const reports = fs.readdirSync(run.dir).filter((f) => /^report-.*\.md$/.test(f)).sort();
     assert.deepEqual(reports, ['report-explorer.md', 'report-implementer-T1.md', 'report-tester.md']);
     const statuses = stageStatuses(run);

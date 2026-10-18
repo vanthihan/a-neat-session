@@ -52,31 +52,39 @@ function repoPrefix(root) {
   return git(root, ['rev-parse', '--show-prefix']).trim().replace(/\/$/, '');
 }
 
-// Porcelain v1 -z entries: "XY path\0", renames/copies add "source\0" after the new path.
+// Porcelain v1 -z entries: "XY path\0", renames/copies add "source\0" after the
+// new path. Returns [{ xy, path }]; a rename source carries the rename's XY.
 function parsePorcelain(out) {
   const fields = out.split('\0');
-  const paths = [];
+  const entries = [];
   for (let i = 0; i < fields.length; i += 1) {
     const entry = fields[i];
     if (entry.length < 4) continue;
-    paths.push(entry.slice(3));
     const xy = entry.slice(0, 2);
+    entries.push({ xy, path: entry.slice(3) });
     if (/[RC]/.test(xy)) {
       // A rename source disappeared too; keep it so a rename cannot hide a deletion.
-      if (xy.includes('R') && fields[i + 1]) paths.push(fields[i + 1]);
+      if (xy.includes('R') && fields[i + 1]) entries.push({ xy, path: fields[i + 1] });
       i += 1;
     }
   }
-  return paths;
+  return entries;
+}
+
+// Changed/untracked entries `{ xy, path }` sorted by path, paths relative to
+// `root` (repo-wide view, also from a subdirectory project), .neat/ excluded.
+function porcelainEntries(root) {
+  const out = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const prefix = repoPrefix(root);
+  return parsePorcelain(out)
+    .map((e) => ({ xy: e.xy, path: prefix ? path.posix.relative(prefix, e.path) : e.path }))
+    .filter((e) => e.path !== '.neat' && !e.path.startsWith('.neat/'))
+    .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
 }
 
 // Sorted unique changed/untracked paths relative to `root`, .neat/ excluded.
 function porcelainPaths(root) {
-  const out = git(root, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-  const prefix = repoPrefix(root);
-  const rel = parsePorcelain(out).map((p) => (prefix ? path.posix.relative(prefix, p) : p));
-  const kept = rel.filter((p) => p !== '.neat' && !p.startsWith('.neat/'));
-  return [...new Set(kept)].sort();
+  return [...new Set(porcelainEntries(root).map((e) => e.path))].sort();
 }
 
 // True when git ignores `rel` (check-ignore exit 0); exit 1 means not ignored.
@@ -109,4 +117,6 @@ function fingerprints(root, paths) {
   return Object.fromEntries(paths.map((p) => [p, fingerprint(root, p)]));
 }
 
-module.exports = { git, isGitRepo, headSha, porcelainPaths, isIgnored, lastLines, fingerprints };
+module.exports = {
+  git, isGitRepo, headSha, porcelainEntries, porcelainPaths, isIgnored, lastLines, fingerprints,
+};

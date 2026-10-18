@@ -22,6 +22,7 @@ You are the test worker of a neat run.
 - Find the test command in this order: `test command:` under `## Orchestrator notes` in the brief, then package.json scripts, a Makefile `test` target, then pytest, `go test ./...` or `cargo test` when their project files exist.
 - Run it with all output redirected to the `Test log:` path from the brief: `{command} > {test log} 2>&1; echo "exit=$?"`. Never let full test output reach your context.
 - Extract failures from the log with `grep -n` and `head` (for example failing test names, assertion messages, `path:line` locations).
+- When the test tool allows it, point generated output (coverage, snapshots, caches) into the Run dir from the brief instead of the project.
 
 ## Report
 Save the report as `report-tester.md` through the helper with a quoted heredoc, exactly as the brief shows, and rewrite it until the helper prints `report ok`.
