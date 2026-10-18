@@ -138,6 +138,13 @@ describe('do.md', () => {
     assert.ok(!text.includes('run_in_background'));
   });
 
+  test('guard note lines are kept in the Worker loop and shown in Finish', () => {
+    const guardStep = lines.find((l) => l.startsWith('5. Guard:'));
+    assert.ok(guardStep && guardStep.includes('Keep every `note:` line for Finish'), guardStep);
+    const finish = body.slice(body.indexOf('## Finish'));
+    assert.match(finish, /^- the guard `note:` lines/m);
+  });
+
   test(`body is at most ${MAX_BODY_WORDS} words`, () => {
     const words = countWords(body);
     assert.ok(words <= MAX_BODY_WORDS, `${words} words`);
