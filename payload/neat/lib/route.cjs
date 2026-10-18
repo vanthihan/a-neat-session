@@ -5,7 +5,8 @@
 // is at or above the soft threshold. Output values come only from the frozen
 // tables below, never from config or environment strings.
 
-const { DEFAULT_PROFILE, PROFILES } = require('./cli-args.cjs');
+const os = require('node:os');
+const { effectiveConfig } = require('./config.cjs');
 
 const TIERS = Object.freeze(['haiku', 'sonnet', 'opus']);
 const ROLES = Object.freeze(['explorer', 'researcher', 'implementer', 'reviewer', 'tester', 'docs']);
@@ -88,13 +89,16 @@ function formatRoute(r) {
   ].join(' ');
 }
 
-// Full route record for `worker` in run `state`.
-function routeWorker(root, state, worker, env = process.env, now = new Date()) {
-  const profile = PROFILES.includes(state.profile) ? state.profile : DEFAULT_PROFILE;
+// Full route record for `worker` in run `state`. The profile comes from the
+// layered config (state.profile wins over project, global and default).
+// `now` is reserved for the usage reading.
+function routeWorker(root, state, worker, env = process.env, now = new Date(), home = os.homedir()) {
+  const cfg = effectiveConfig({ root, env, home, state });
+  const profile = cfg.profile;
   const complexity = COMPLEXITY_LEVELS.includes(state.complexity) ? state.complexity : DEFAULT_COMPLEXITY;
   const usage = null;
   const ctx = null;
-  const r = routeFor({ role: roleOf(worker), profile, complexity, usage, soft: DEFAULT_SOFT });
+  const r = routeFor({ role: roleOf(worker), profile, complexity, usage, soft: cfg.thresholds.soft });
   return { worker, model: r.model, effort: r.effort, profile, complexity, usage, stepdown: r.stepdown, hard: false, ctx };
 }
 

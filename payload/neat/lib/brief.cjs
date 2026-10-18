@@ -138,11 +138,11 @@ function writeBrief(root, id, worker, notes, now, env = process.env) {
     throw new UsageError(`invalid worker name '${worker}' (use explorer|reviewer|tester|implementer-T<n>|docs-D<n>)`);
   }
   const state = runState.loadRun(root, id);
+  const route = routeWorker(root, state, worker, env, now); // config errors stop here, before any write
   const runDir = runState.runDir(root, id);
   const text = buildBrief(state, worker, { runDir, helperPath: helperPath(), notes });
   const file = runState.writeRunFile(root, id, `brief-${worker}.md`, text);
   const report = path.join(runDir, `report-${worker}.md`);
-  const route = routeWorker(root, state, worker, env, now);
   const extra = { model: route.model, effort: route.effort };
   runState.saveRun(root, runState.setWorker(state, worker, 'running', report, extra), now);
   return { file, route };

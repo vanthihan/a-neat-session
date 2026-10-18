@@ -13,6 +13,7 @@ const planCheck = require(path.join(LIB, 'plan-check.cjs'));
 const brief = require(path.join(LIB, 'brief.cjs'));
 const gitOps = require(path.join(LIB, 'git-ops.cjs'));
 const route = require(path.join(LIB, 'route.cjs'));
+const config = require(path.join(LIB, 'config.cjs'));
 
 const MAX_ERROR_LINES = 5;
 
@@ -27,6 +28,8 @@ const HELP = [
   'neat brief <run-id> <worker> [--stdin]',
   'neat write <run-id> <file-name> --stdin',
   'neat report check <file>',
+  'neat config show [<run-id>]',
+  'neat config get <profile|thresholds.soft|thresholds.hard|usage.capturePath>',
   'neat status [--json]',
   'neat help',
 ].join('\n');
@@ -54,6 +57,7 @@ function cmdRunNew(args) {
   const text = useStdin ? readStdin() : words.join(' ');
   const { task, mode, profile } = parseTaskArgs(text);
   const root = runState.projectRoot(process.env, process.cwd());
+  config.effectiveConfig({ root, env: process.env, state: { profile } }); // invalid config: exit 2, no run
   const state = runState.createRun(root, { task, mode, profile }, runState.currentTime(process.env));
   out(`id=${state.id} mode=${state.mode} dir=${runState.runDir(root, state.id)}`);
   gitOps.startLines(root, state).forEach((line) => out(line));
@@ -168,6 +172,20 @@ function cmdBrief(args) {
   return 0;
 }
 
+function cmdConfig(sub, args) {
+  const root = runState.projectRoot(process.env, process.cwd());
+  if (sub === 'show' && args.length <= 1) {
+    const state = args.length === 1 ? runState.loadRun(root, args[0]) : null;
+    config.configLines(config.effectiveConfig({ root, env: process.env, state })).forEach((line) => out(line));
+    return 0;
+  }
+  if (sub === 'get' && args.length === 1) {
+    out(config.configValue(config.effectiveConfig({ root, env: process.env }), args[0]));
+    return 0;
+  }
+  throw new UsageError('usage: neat config show [<run-id>] | neat config get <key>');
+}
+
 function dispatch(argv) {
   const [cmd, sub, ...rest] = argv;
   if (cmd === 'run' && sub === 'new') return cmdRunNew(rest);
@@ -178,6 +196,7 @@ function dispatch(argv) {
   if (cmd === 'run' && sub === 'commit') return cmdRunCommit(rest);
   if (cmd === 'plan' && sub === 'check') return cmdPlanCheck(rest);
   if (cmd === 'brief') return cmdBrief(argv.slice(1));
+  if (cmd === 'config') return cmdConfig(sub, rest);
   if (cmd === 'status') return cmdStatus(argv.slice(1));
   if (cmd === 'write') return cmdWrite(argv.slice(1));
   if (cmd === 'report' && sub === 'check') return cmdReportCheck(rest);
