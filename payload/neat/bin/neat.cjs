@@ -11,6 +11,7 @@ const { parseTaskArgs, UsageError } = require(path.join(LIB, 'cli-args.cjs'));
 const { formatStatus } = require(path.join(LIB, 'status.cjs'));
 const planCheck = require(path.join(LIB, 'plan-check.cjs'));
 const brief = require(path.join(LIB, 'brief.cjs'));
+const gitOps = require(path.join(LIB, 'git-ops.cjs'));
 
 const MAX_ERROR_LINES = 5;
 
@@ -18,6 +19,9 @@ const HELP = [
   'neat run new [--stdin] [--mode gate|auto|step] [task]',
   'neat run stage <run-id> <explore|plan|implement|review|test|docs|done|cancelled>',
   'neat run worker <run-id> <name> <running|done|failed|report-invalid>',
+  'neat run guard <run-id> [--tasks T1,T2]',
+  'neat run diff <run-id>',
+  'neat run commit <run-id>',
   'neat plan check <run-id>',
   'neat brief <run-id> <worker> [--stdin]',
   'neat write <run-id> <file-name> --stdin',
@@ -43,6 +47,7 @@ function cmdRunNew(args) {
   const root = runState.projectRoot(process.env, process.cwd());
   const state = runState.createRun(root, { task, mode }, runState.currentTime(process.env));
   out(`id=${state.id} mode=${state.mode} dir=${runState.runDir(root, state.id)}`);
+  gitOps.startLines(root, state).forEach((line) => out(line));
   return 0;
 }
 
@@ -108,12 +113,38 @@ function cmdReportCheck(args) {
   return printCheck(reportCheck.checkReportFile(path.resolve(process.cwd(), args[0])));
 }
 
+function printResult(result) {
+  result.lines.forEach((line) => out(line));
+  return result.ok ? 0 : 1;
+}
+
+function cmdRunGuard(args) {
+  const [id, flag, list] = args;
+  const ok = id && (args.length === 1 || (args.length === 3 && flag === '--tasks' && list));
+  if (!ok) throw new UsageError('usage: neat run guard <run-id> [--tasks T1,T2]');
+  const taskIds = list ? list.split(',').map((s) => s.trim()).filter(Boolean) : [];
+  const root = runState.projectRoot(process.env, process.cwd());
+  return printResult(gitOps.guardRun(root, id, taskIds, runState.currentTime(process.env)));
+}
+
+function cmdRunDiff(args) {
+  if (args.length !== 1) throw new UsageError('usage: neat run diff <run-id>');
+  const root = runState.projectRoot(process.env, process.cwd());
+  const { file, files, lines } = gitOps.writeDiff(root, args[0]);
+  out(`diff ${file} files=${files} lines=${lines}`);
+  return 0;
+}
+
+function cmdRunCommit(args) {
+  if (args.length !== 1) throw new UsageError('usage: neat run commit <run-id>');
+  const root = runState.projectRoot(process.env, process.cwd());
+  return printResult(gitOps.commitRun(root, args[0], runState.currentTime(process.env)));
+}
+
 function cmdPlanCheck(args) {
   if (args.length !== 1) throw new UsageError('usage: neat plan check <run-id>');
   const root = runState.projectRoot(process.env, process.cwd());
-  const result = planCheck.checkPlan(root, args[0], runState.currentTime(process.env));
-  result.lines.forEach((line) => out(line));
-  return result.ok ? 0 : 1;
+  return printResult(planCheck.checkPlan(root, args[0], runState.currentTime(process.env)));
 }
 
 function cmdBrief(args) {
@@ -131,6 +162,9 @@ function dispatch(argv) {
   if (cmd === 'run' && sub === 'new') return cmdRunNew(rest);
   if (cmd === 'run' && sub === 'stage') return cmdRunStage(rest);
   if (cmd === 'run' && sub === 'worker') return cmdRunWorker(rest);
+  if (cmd === 'run' && sub === 'guard') return cmdRunGuard(rest);
+  if (cmd === 'run' && sub === 'diff') return cmdRunDiff(rest);
+  if (cmd === 'run' && sub === 'commit') return cmdRunCommit(rest);
   if (cmd === 'plan' && sub === 'check') return cmdPlanCheck(rest);
   if (cmd === 'brief') return cmdBrief(argv.slice(1));
   if (cmd === 'status') return cmdStatus(argv.slice(1));

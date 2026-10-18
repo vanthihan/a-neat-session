@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { UsageError } = require('./cli-args.cjs');
+const gitLib = require('./git.cjs');
 
 const PIPELINE = Object.freeze(['explore', 'plan', 'implement', 'review', 'test', 'docs']);
 const STAGES = Object.freeze([...PIPELINE, 'done', 'cancelled']);
@@ -101,7 +102,15 @@ function writeState(root, state) {
   atomicWrite(file, `${JSON.stringify(state, null, 2)}\n`);
 }
 
+// Git baseline of a run: SHAs and paths already dirty (null/null/[] outside git).
+function gitBaseline(root) {
+  if (!gitLib.isGitRepo(root)) return { baseSha: null, headSha: null, dirtyAtStart: [] };
+  const sha = gitLib.headSha(root);
+  return { baseSha: sha, headSha: sha, dirtyAtStart: gitLib.porcelainPaths(root) };
+}
+
 function createRun(root, { task, mode }, now = currentTime()) {
+  const baseline = gitBaseline(root);
   fs.mkdirSync(runsDir(root), { recursive: true });
   const id = makeRunId(task, now, listRunIds(root));
   fs.mkdirSync(runDir(root, id));
@@ -113,6 +122,12 @@ function createRun(root, { task, mode }, now = currentTime()) {
     stage: 'created',
     stages: PIPELINE.map((name) => ({ name, status: 'pending' })),
     workers: [],
+    ...baseline,
+    tasks: [],
+    changed: [],
+    unowned: [],
+    violations: [],
+    commits: [],
     createdAt: iso,
     updatedAt: iso,
   };
