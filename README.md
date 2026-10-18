@@ -337,7 +337,9 @@ The capture goes to `<claude config dir>/neat/usage.json`, or to the global
 The capture is a single file written by whichever session refreshed its
 status line last. Rate-limit windows count until their reset time; the
 context percentage counts only while the file is younger than 15 minutes and
-was written by the reading session.
+does not name another session. When the capture or the reading session has
+no session id, the percentage is used as it is, even if another session
+wrote it.
 
 ## Codex workers
 
@@ -398,7 +400,9 @@ the global install's hooks stay silent there.
 
 When a neat worker stops, its final message is checked against the report
 contract: the five headings `## Status`, `## Findings`, `## Decisions`,
-`## Open questions`, `## Artifacts`, a valid status line and at most 300 words.
+`## Open questions`, `## Artifacts`, a valid status line, at most 300 words,
+and every path listed under `## Artifacts` must exist (relative paths are
+resolved against the run dir).
 A worker is matched to its run by the brief it was given, else by the
 session's own run. A broken report is sent back to the worker with the
 checker's error lines. After
@@ -551,8 +555,8 @@ ignored yet; add it so run files never end up in a commit.
   such as `Bash(npm test *)`, or set `filter.enabled` to `false`.
 - **No `context:` lines and usage `unknown` in `neat route`:** set up the
   [usage capture](#usage-capture-status-line). The context percentage is
-  also ignored when the capture is older than 15 minutes or was written by
-  another session.
+  also ignored when the capture is older than 15 minutes or names another
+  session (a capture or session without a session id is still used).
 - **Codex is never used:** run `codex detect` through the helper
   (`node ~/.claude/neat/bin/neat.cjs codex detect`), check `codex login`,
   `codex.enabled` and `codex.sandboxDefault`.
