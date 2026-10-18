@@ -11,7 +11,13 @@ const path = require('node:path');
 const { REPO_ROOT, childEnv, runNode, makeTempDir, removeDir } = require('../support/helpers.cjs');
 
 const COMMANDS_DIR = path.join(REPO_ROOT, 'payload', 'commands', 'neat');
+const GUIDES_DIR = path.join(REPO_ROOT, 'payload', 'neat', 'guides');
 const HELPER = path.join(REPO_ROOT, 'payload', 'neat', 'bin', 'neat.cjs');
+const MAX_GUIDE_WORDS = 300;
+const CODEX_GUIDE_MENTIONS = [
+  'codex run', 'codex wait', 'codex result', 'codex cancel', 'action=pause', 'action=skip',
+  'AskUserQuestion', 'report-invalid', 'background Bash command', 'untrusted',
+];
 const MAX_DESCRIPTION = 200;
 const MAX_BODY_WORDS = 1500;
 const DO_SECTIONS = [
@@ -22,7 +28,7 @@ const DO_MENTIONS = [
   'neat-explorer', 'neat-researcher', 'neat-implementer', 'neat-reviewer', 'neat-tester', 'neat-docs',
   'propose=yes', '--research', 'Brief: ', 'subagent_type', 'AskUserQuestion', 'SendMessage', 'untrusted',
   'run commit', 'plan check', 'run guard', 'run classify', 'gate', 'auto', 'step',
-  'must not contain a line NEAT_EOF', 'skipped',
+  'must not contain a line NEAT_EOF', 'skipped', 'guide codex', 'target=codex',
 ];
 const BIN_CALL = /node \{\{NEAT_BIN\}\}( [^`\n]*)?/g;
 
@@ -61,6 +67,22 @@ function helpSubcommands() {
       }
       return words.join(' ');
     });
+}
+
+// Asserts that every `node {{NEAT_BIN}} ...` call in `text` names a subcommand
+// listed by `neat help`; returns the number of calls.
+function assertKnownHelperCalls(text, known) {
+  const calls = [...text.matchAll(BIN_CALL)].map((m) => (m[1] || '').trim());
+  for (const call of calls) {
+    const words = call.split(/\s+/);
+    const ok = known.some((sub) => sub.split(' ').every((w, i) => words[i] === w));
+    assert.ok(ok, `unknown helper call: node {{NEAT_BIN}} ${call}`);
+  }
+  return calls.length;
+}
+
+function guideFiles() {
+  return fs.readdirSync(GUIDES_DIR).filter((f) => f.endsWith('.md')).sort();
 }
 
 function countWords(text) {
@@ -116,17 +138,8 @@ describe('do.md', () => {
   });
 
   test('every helper call names a subcommand listed by neat help', () => {
-    const known = helpSubcommands();
-    const calls = [...body.matchAll(BIN_CALL)].map((m) => (m[1] || '').trim());
-    assert.ok(calls.length >= 10, `only ${calls.length} helper calls`);
-    for (const call of calls) {
-      const words = call.split(/\s+/);
-      const ok = known.some((sub) => {
-        const subWords = sub.split(' ');
-        return subWords.every((w, i) => words[i] === w);
-      });
-      assert.ok(ok, `unknown helper call: node {{NEAT_BIN}} ${call}`);
-    }
+    const count = assertKnownHelperCalls(body, helpSubcommands());
+    assert.ok(count >= 10, `only ${count} helper calls`);
   });
 
   test('mentions every worker, the path-only prompt, the gates and the helper safety commands', () => {
@@ -151,6 +164,50 @@ describe('do.md', () => {
   });
 });
 
+describe('guides', () => {
+  test('the codex guide ships', () => {
+    assert.ok(guideFiles().includes('codex.md'), guideFiles().join(', '));
+  });
+
+  test('every helper call in a guide names a subcommand listed by neat help', () => {
+    const known = helpSubcommands();
+    for (const file of guideFiles()) {
+      const count = assertKnownHelperCalls(fs.readFileSync(path.join(GUIDES_DIR, file), 'utf8'), known);
+      assert.ok(count >= 1, `${file} has no helper call`);
+    }
+  });
+
+  test(`each guide is at most ${MAX_GUIDE_WORDS} words, without $ARGUMENTS or the background parameter`, () => {
+    for (const file of guideFiles()) {
+      const text = fs.readFileSync(path.join(GUIDES_DIR, file), 'utf8');
+      assert.ok(countWords(text) <= MAX_GUIDE_WORDS, `${file}: ${countWords(text)} words`);
+      assert.ok(!text.includes('$ARGUMENTS'), `${file} names $ARGUMENTS`);
+      assert.ok(!text.includes('run_in_background'), `${file} names the background parameter`);
+    }
+  });
+
+  test('the codex guide covers launch, background wait, result, cancel, pause and skip', () => {
+    const text = fs.readFileSync(path.join(GUIDES_DIR, 'codex.md'), 'utf8');
+    for (const word of CODEX_GUIDE_MENTIONS) assert.ok(text.includes(word), `missing ${word}`);
+  });
+
+  test('neat guide codex prints the guide with the absolute helper path', () => {
+    const res = runNode([HELPER, 'guide', 'codex']);
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(!res.stdout.includes('{{NEAT_BIN}}'));
+    assert.ok(res.stdout.includes(`node ${HELPER} codex wait`), res.stdout);
+  });
+
+  for (const args of [['nope'], ['../x'], [], ['codex', 'extra']]) {
+    test(`neat guide ${args.join(' ') || '(no topic)'} exits 2 and lists the topics`, () => {
+      const res = runNode([HELPER, 'guide', ...args]);
+      assert.equal(res.status, 2, res.stdout);
+      assert.match(res.stderr, /topics: .*codex/);
+      assert.equal(res.stdout, '');
+    });
+  }
+});
+
 describe('local install renders every command and agent', () => {
   let proj;
 
@@ -171,5 +228,14 @@ describe('local install renders every command and agent', () => {
     assert.ok(mdFiles.length >= 7, `only ${mdFiles.length} .md files installed`);
     const left = mdFiles.filter((f) => fs.readFileSync(path.join(root, f), 'utf8').includes('{{NEAT_BIN}}'));
     assert.deepEqual(left, []);
+    assert.ok(mdFiles.map((f) => f.split(path.sep).join('/')).includes('neat/guides/codex.md'), mdFiles.join(', '));
+  });
+
+  test('the installed helper prints the guide with its own path', () => {
+    const installed = path.join(proj, '.claude', 'neat', 'bin', 'neat.cjs');
+    const res = runNode([installed, 'guide', 'codex'], { cwd: proj, env: childEnv({ NEAT_PROJECT_DIR: proj }) });
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(res.stdout.includes(`node ${installed} codex run`), res.stdout);
+    assert.ok(!res.stdout.includes('{{NEAT_BIN}}'));
   });
 });
