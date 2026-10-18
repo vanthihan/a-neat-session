@@ -205,3 +205,92 @@ describe('CLI', () => {
     assert.equal(force.stdout.split('\n')[1], 'note: CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1 overrides the routed model');
   });
 });
+
+describe('routeWorker usage step-down', () => {
+  const NOW = new Date('2026-05-01T12:00:00Z');
+  const FUTURE = Math.floor(NOW.getTime() / 1000) + 3600;
+  let root;
+  let cfgDir;
+  let env;
+
+  before(() => {
+    root = makeTempDir('neat-route-usage-root-');
+    cfgDir = makeTempDir('neat-route-usage-cfg-');
+    env = { CLAUDE_CONFIG_DIR: cfgDir };
+    fs.mkdirSync(path.join(cfgDir, 'neat'));
+  });
+
+  after(() => {
+    removeDir(root);
+    removeDir(cfgDir);
+  });
+
+  function setCapture(fiveHour, ctx = null, file = path.join(cfgDir, 'neat', 'usage.json')) {
+    const data = { context_window: { used_percentage: ctx } };
+    if (fiveHour !== null) data.rate_limits = { five_hour: { used_percentage: fiveHour, resets_at: FUTURE } };
+    fs.writeFileSync(file, JSON.stringify(data));
+  }
+
+  function setGlobal(obj) {
+    const file = path.join(cfgDir, 'neat', 'config.json');
+    if (obj === null) fs.rmSync(file, { force: true });
+    else fs.writeFileSync(file, JSON.stringify(obj));
+  }
+
+  function line(worker, state = { profile: null, complexity: 'normal' }) {
+    return route.formatRoute(route.routeWorker(root, state, worker, env, NOW, cfgDir));
+  }
+
+  test('usage 72 at soft 70 steps every worker one tier down, effort unchanged', () => {
+    setGlobal(null);
+    setCapture(72, 33);
+    assert.equal(line('implementer-T1'),
+      'route worker=implementer-T1 model=haiku effort=medium profile=adaptive complexity=normal usage=72% stepdown=yes hard=no ctx=33%');
+    assert.match(line('reviewer'), /^route worker=reviewer model=sonnet effort=medium .* usage=72% stepdown=yes hard=no ctx=33%$/);
+    assert.match(line('explorer'), /^route worker=explorer model=haiku effort=medium .* stepdown=yes /);
+  });
+
+  test('usage exactly at soft steps down; one below does not', () => {
+    setGlobal(null);
+    setCapture(70);
+    assert.match(line('reviewer'), / model=sonnet .* usage=70% stepdown=yes .* ctx=unknown$/);
+    setCapture(69);
+    assert.match(line('reviewer'), / model=opus .* usage=69% stepdown=no /);
+  });
+
+  test('usage at or above hard reports hard=yes and still drops exactly one tier', () => {
+    setGlobal(null);
+    setCapture(92);
+    assert.match(line('reviewer'), / model=sonnet effort=medium .* usage=92% stepdown=yes hard=yes /);
+  });
+
+  test('inherit never steps down but still reports usage and hard', () => {
+    setGlobal(null);
+    setCapture(95);
+    assert.match(line('reviewer', { profile: 'inherit' }),
+      / model=inherit effort=none profile=inherit .* usage=95% stepdown=no hard=yes /);
+  });
+
+  test('no capture gives usage=unknown and no step-down', () => {
+    setGlobal(null);
+    fs.rmSync(path.join(cfgDir, 'neat', 'usage.json'), { force: true });
+    assert.match(line('reviewer'), / model=opus .* usage=unknown stepdown=no hard=no ctx=unknown$/);
+  });
+
+  test('global thresholds.soft 50 makes usage 55 step down', () => {
+    setGlobal({ thresholds: { soft: 50 } });
+    setCapture(55);
+    assert.match(line('reviewer'), / model=sonnet .* usage=55% stepdown=yes hard=no /);
+    setGlobal(null);
+  });
+
+  test('the capture is read from the global usage.capturePath', () => {
+    const other = path.join(cfgDir, 'elsewhere.json');
+    setCapture(10);
+    setCapture(88, null, other);
+    setGlobal({ usage: { capturePath: other } });
+    assert.match(line('reviewer'), / usage=88% stepdown=yes /);
+    setGlobal(null);
+    assert.match(line('reviewer'), / usage=10% stepdown=no /);
+  });
+});

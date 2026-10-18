@@ -26,12 +26,12 @@ before(() => {
 
 after(() => removeDir(proj));
 
-function neat(args, input) {
-  return runNode([helper, ...args], { cwd: proj, env, input });
+function neat(args, input, runEnv = env) {
+  return runNode([helper, ...args], { cwd: proj, env: runEnv, input });
 }
 
-function newRun(taskText) {
-  const res = neat(['run', 'new', '--stdin'], taskText);
+function newRun(taskText, runEnv = env) {
+  const res = neat(['run', 'new', '--stdin'], taskText, runEnv);
   assert.equal(res.status, 0, res.stderr);
   const first = res.stdout.split('\n')[0];
   assert.match(first, /^id=\S+ mode=(gate|auto|step) dir=\S+$/);
@@ -43,9 +43,10 @@ function readState(dir) {
   return JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8'));
 }
 
-function briefRoute(id, worker) {
-  const res = neat(['brief', id, worker]);
+function briefRoute(id, worker, runEnv = env) {
+  const res = neat(['brief', id, worker], undefined, runEnv);
   assert.equal(res.status, 0, res.stderr);
+  assert.equal(res.stderr, '');
   const lines = res.stdout.split('\n');
   assert.equal(lines.length, 3, res.stdout);
   assert.ok(path.isAbsolute(lines[0]), lines[0]);
@@ -113,4 +114,49 @@ test('the installed do.md passes the routed model and effort to the Agent call',
   assert.ok(text.includes('inherit'), 'do.md must mention inherit');
   assert.ok(text.includes('--profile'), 'do.md must mention --profile');
   assert.ok(text.includes('rejects `effort`'), 'do.md must give the effort fallback');
+});
+
+// Usage step-down through the installed helper. Each case uses its own
+// CLAUDE_CONFIG_DIR so a capture never leaks into the other tests.
+const NOW_ISO = '2026-05-01T12:00:00.000Z';
+const FUTURE = Math.floor(Date.parse(NOW_ISO) / 1000) + 3600;
+
+function usageEnv() {
+  const cfg = makeTempDir('neat-route-cfg-');
+  return { cfg, runEnv: { ...env, CLAUDE_CONFIG_DIR: cfg, NEAT_NOW: NOW_ISO } };
+}
+
+function statuslineJson(fiveHour) {
+  return JSON.stringify({
+    session_id: 'sess-0000',
+    model: { id: 'example-model', display_name: 'Example' },
+    context_window: { used_percentage: 20 },
+    rate_limits: { five_hour: { used_percentage: fiveHour, resets_at: FUTURE } },
+  });
+}
+
+test('a capture at five_hour 80 steps the reviewer down to sonnet', () => {
+  const { cfg, runEnv } = usageEnv();
+  try {
+    fs.mkdirSync(path.join(cfg, 'neat'));
+    fs.writeFileSync(path.join(cfg, 'neat', 'usage.json'), statuslineJson(80));
+    const { id } = newRun('usage step-down\n', runEnv);
+    const line = briefRoute(id, 'reviewer', runEnv);
+    assert.match(line, / model=sonnet /);
+    assert.match(line, / usage=80% stepdown=yes hard=no ctx=20%$/);
+  } finally {
+    removeDir(cfg);
+  }
+});
+
+test('without a capture the reviewer stays on opus with usage unknown and no stderr', () => {
+  const { cfg, runEnv } = usageEnv();
+  try {
+    const { id } = newRun('no capture\n', runEnv);
+    const line = briefRoute(id, 'reviewer', runEnv);
+    assert.match(line, / model=opus /);
+    assert.match(line, / usage=unknown stepdown=no /);
+  } finally {
+    removeDir(cfg);
+  }
 });

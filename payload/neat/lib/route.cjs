@@ -9,6 +9,7 @@ const os = require('node:os');
 const { effectiveConfig } = require('./config.cjs');
 const { UsageError } = require('./cli-args.cjs');
 const { COMPLEXITIES, WORKER_NAME } = require('./run-state.cjs');
+const { readUsage, formatPercent } = require('./usage.cjs');
 
 const TIERS = Object.freeze(['haiku', 'sonnet', 'opus']);
 const ROLES = Object.freeze(['explorer', 'researcher', 'implementer', 'reviewer', 'tester', 'docs']);
@@ -66,10 +67,6 @@ function routeFor({ role, profile, complexity = DEFAULT_COMPLEXITY, usage = null
   return { model: TIERS[tier], effort, stepdown };
 }
 
-function percent(value) {
-  return typeof value === 'number' && Number.isFinite(value) ? `${Math.round(value)}%` : 'unknown';
-}
-
 function yesNo(flag) {
   return flag ? 'yes' : 'no';
 }
@@ -83,24 +80,26 @@ function formatRoute(r) {
     `effort=${r.effort}`,
     `profile=${r.profile}`,
     `complexity=${r.complexity}`,
-    `usage=${percent(r.usage)}`,
+    `usage=${formatPercent(r.usage)}`,
     `stepdown=${yesNo(r.stepdown)}`,
     `hard=${yesNo(r.hard)}`,
-    `ctx=${percent(r.ctx)}`,
+    `ctx=${formatPercent(r.ctx)}`,
   ].join(' ');
 }
 
 // Full route record for `worker` in run `state`. The profile comes from the
-// layered config (state.profile wins over project, global and default).
-// `now` is reserved for the usage reading.
+// layered config (state.profile wins over project, global and default). Usage
+// comes from the capture at the effective usage.capturePath, judged at `now`:
+// at or above thresholds.soft the worker drops one tier; thresholds.hard is
+// only reported. Context usage is reported and never changes the route.
 function routeWorker(root, state, worker, env = process.env, now = new Date(), home = os.homedir()) {
   const cfg = effectiveConfig({ root, env, home, state });
   const profile = cfg.profile;
   const complexity = COMPLEXITIES.includes(state.complexity) ? state.complexity : DEFAULT_COMPLEXITY;
-  const usage = null;
-  const ctx = null;
+  const { usage, ctx } = readUsage(cfg.usage.capturePath, now);
   const r = routeFor({ role: roleOf(worker), profile, complexity, usage, soft: cfg.thresholds.soft });
-  return { worker, model: r.model, effort: r.effort, profile, complexity, usage, stepdown: r.stepdown, hard: false, ctx };
+  const hard = usage !== null && usage >= cfg.thresholds.hard;
+  return { worker, model: r.model, effort: r.effort, profile, complexity, usage, stepdown: r.stepdown, hard, ctx };
 }
 
 // `neat route` accepts any run worker name or a bare role.
