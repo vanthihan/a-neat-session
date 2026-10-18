@@ -13,7 +13,7 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const SCRUBBED_ENV = [
   'CLAUDE_PROJECT_DIR', 'CLAUDE_CONFIG_DIR', 'NEAT_PROJECT_DIR', 'NEAT_NOW',
   'CLAUDE_CODE_EFFORT_LEVEL', 'CLAUDE_CODE_SUBAGENT_MODEL_FORCE',
-  'NEAT_CODEX_BIN', 'TMUX', 'TMUX_PANE',
+  'NEAT_CODEX_BIN', 'TMUX', 'TMUX_PANE', 'CLAUDE_CODE_SESSION_ID',
 ];
 
 // Children never find the real codex: NEAT_CODEX_BIN defaults to `none`

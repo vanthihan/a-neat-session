@@ -16,6 +16,10 @@ const RUN_ID = /^\d{8}-\d{6}-[a-z0-9-]{1,48}$/;
 const RUN_FILE_NAME = /^[a-z][A-Za-z0-9-]*\.(md|txt|patch|json)$/;
 const MAX_FILE_NAME = 80;
 const MAX_SLUG = 40;
+const SESSION_ID = /^[A-Za-z0-9-]{1,64}$/;
+// A run not updated for this long no longer counts as active for the hooks.
+const ACTIVE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const TERMINAL_STAGES = Object.freeze(['done', 'cancelled']);
 
 function projectRoot(env = process.env, cwd = process.cwd()) {
   if (env.NEAT_PROJECT_DIR) return path.resolve(env.NEAT_PROJECT_DIR);
@@ -120,7 +124,12 @@ function gitBaseline(root) {
   };
 }
 
-function createRun(root, { task, mode, profile, research, tmux }, now = currentTime()) {
+// The Claude Code session that started a run, or null when it is unknown.
+function cleanSessionId(value) {
+  return typeof value === 'string' && SESSION_ID.test(value) ? value : null;
+}
+
+function createRun(root, { task, mode, profile, research, tmux, sessionId }, now = currentTime()) {
   const baseline = gitBaseline(root);
   fs.mkdirSync(runsDir(root), { recursive: true });
   const id = makeRunId(task, now, listRunIds(root));
@@ -133,6 +142,7 @@ function createRun(root, { task, mode, profile, research, tmux }, now = currentT
     profile: profile || null,
     research: Boolean(research),
     tmux: Boolean(tmux),
+    sessionId: cleanSessionId(sessionId),
     stage: 'created',
     // research runs only when selected (`neat stages`), so it starts skipped.
     stages: PIPELINE.map((name) => ({ name, status: name === 'research' ? 'skipped' : 'pending' })),
@@ -271,6 +281,26 @@ function listRuns(root) {
     });
 }
 
+function updatedAtMs(state) {
+  const t = Date.parse(state.updatedAt);
+  return Number.isNaN(t) ? null : t;
+}
+
+// Unfinished runs (stage neither done nor cancelled) updated within
+// `maxAgeMs` of `now`, newest update first. Unreadable runs and states with a
+// malformed id are left out; `{ maxAgeMs: Infinity }` keeps unfinished runs
+// of any age.
+function activeRuns(root, now = currentTime(), { maxAgeMs = ACTIVE_MAX_AGE_MS } = {}) {
+  const nowMs = now.getTime();
+  return listRuns(root)
+    .filter((s) => !s.error && isValidRunId(s.id) && typeof s.stage === 'string' && !TERMINAL_STAGES.includes(s.stage))
+    .filter((s) => {
+      const t = updatedAtMs(s);
+      return maxAgeMs === Infinity || (t !== null && nowMs - t <= maxAgeMs);
+    })
+    .sort((a, b) => (updatedAtMs(b) || 0) - (updatedAtMs(a) || 0));
+}
+
 function assertRunFileName(name) {
   const ok = typeof name === 'string' && name.length <= MAX_FILE_NAME
     && name !== 'state.json' && RUN_FILE_NAME.test(name);
@@ -293,6 +323,7 @@ module.exports = {
   WORKER_NAME,
   WORKER_STATUSES,
   COMPLEXITIES,
+  ACTIVE_MAX_AGE_MS,
   projectRoot,
   runsDir,
   runDir,
@@ -308,5 +339,6 @@ module.exports = {
   setComplexity,
   setWorker,
   listRuns,
+  activeRuns,
   writeRunFile,
 };

@@ -6,6 +6,19 @@ const os = require('node:os');
 const path = require('node:path');
 
 const LIB = path.join(__dirname, '..', 'lib');
+
+// Hooks run on many session events: dispatch them before the other modules
+// load, and never let a hook fail the session.
+if (process.argv[2] === 'hook') {
+  try {
+    require(path.join(LIB, 'hooks.cjs')).main(process.argv[3]);
+  } catch {
+    // no output: a broken hook must not block the session
+  }
+  process.exitCode = 0;
+  return;
+}
+
 const runState = require(path.join(LIB, 'run-state.cjs'));
 const reportCheck = require(path.join(LIB, 'report-check.cjs'));
 const { parseTaskArgs, UsageError, MODES } = require(path.join(LIB, 'cli-args.cjs'));
@@ -22,6 +35,7 @@ const codex = require(path.join(LIB, 'codex.cjs'));
 const guide = require(path.join(LIB, 'guide.cjs'));
 const jobs = require(path.join(LIB, 'jobs.cjs'));
 const reviewMerge = require(path.join(LIB, 'review-merge.cjs'));
+const nextStepLib = require(path.join(LIB, 'next-step.cjs'));
 
 const MAX_ERROR_LINES = 5;
 const MAX_MERGE_TOP = 5;
@@ -35,6 +49,7 @@ const HELP = [
   'neat run guard <run-id> [--tasks T1,T2]',
   'neat run diff <run-id>',
   'neat run commit <run-id>',
+  'neat run resume [<run-id>] [--stdin]',
   'neat stages <run-id> --type <small-fix|feature|refactor|research|docs> [--research] [--mode gate|auto|step]',
   'neat plan check <run-id>',
   'neat brief <run-id> <worker> [--stdin] [--fix]',
@@ -48,6 +63,7 @@ const HELP = [
   'neat usage-capture [--path <file>] [--quiet]',
   ...codexCli.HELP_LINES,
   'neat guide <topic>',
+  'neat hook <name>',
   'neat help',
 ].join('\n');
 
@@ -78,7 +94,9 @@ function cmdRunNew(args) {
   if (cfg.codex.enabled === 'on' && !codex.detect(process.env).found) {
     throw new UsageError('codex.enabled is on but codex was not found');
   }
-  const state = runState.createRun(root, { task, mode, profile, research, tmux }, runState.currentTime(process.env));
+  const sessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  const fields = { task, mode, profile, research, tmux, sessionId };
+  const state = runState.createRun(root, fields, runState.currentTime(process.env));
   out(`id=${state.id} mode=${state.mode} dir=${runState.runDir(root, state.id)}`);
   gitOps.startLines(root, state).forEach((line) => out(line));
   return 0;
@@ -264,6 +282,19 @@ function cmdRunCommit(args) {
   return printResult(gitOps.commitRun(root, args[0], runState.currentTime(process.env)));
 }
 
+// Where a run stands and its next step, read from disk.
+function cmdRunResume(args) {
+  if (args.length !== 1) throw new UsageError('usage: neat run resume [<run-id>] [--stdin]');
+  const [id] = args;
+  if (!runState.isValidRunId(id)) throw new UsageError(`invalid run id: ${id}`);
+  const root = runState.projectRoot(process.env, process.cwd());
+  const state = runState.loadRun(root, id);
+  const dir = runState.runDir(root, id);
+  out(`run=${state.id} mode=${state.mode} stage=${state.stage} type=${state.type || 'none'} dir=${dir}`);
+  out(nextStepLib.formatNext(nextStepLib.nextStep(state, nextStepLib.runFacts(root, state))));
+  return 0;
+}
+
 function cmdPlanCheck(args) {
   if (args.length !== 1) throw new UsageError('usage: neat plan check <run-id>');
   const root = runState.projectRoot(process.env, process.cwd());
@@ -389,6 +420,7 @@ function dispatch(argv) {
   if (cmd === 'run' && sub === 'guard') return cmdRunGuard(rest);
   if (cmd === 'run' && sub === 'diff') return cmdRunDiff(rest);
   if (cmd === 'run' && sub === 'commit') return cmdRunCommit(rest);
+  if (cmd === 'run' && sub === 'resume') return cmdRunResume(rest);
   if (cmd === 'stages') return cmdStages(argv.slice(1));
   if (cmd === 'plan' && sub === 'check') return cmdPlanCheck(rest);
   if (cmd === 'brief') return cmdBrief(argv.slice(1));

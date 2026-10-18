@@ -457,3 +457,57 @@ test('updateRun breaks a stale lock and releases its own lock when the change th
     removeDir(own);
   }
 });
+
+test('createRun stores a well-formed sessionId and null otherwise', () => {
+  const own = makeTempDir('neat-state-session-');
+  try {
+    assert.equal(rs.createRun(own, { task: 'a', mode: 'gate', sessionId: 'sess-a' }, NOW).sessionId, 'sess-a');
+    assert.equal(rs.createRun(own, { task: 'b', mode: 'gate' }, NOW).sessionId, null);
+    assert.equal(rs.createRun(own, { task: 'c', mode: 'gate', sessionId: '../x' }, NOW).sessionId, null);
+    assert.equal(rs.createRun(own, { task: 'd', mode: 'gate', sessionId: 'a'.repeat(65) }, NOW).sessionId, null);
+    const onDisk = rs.listRuns(own).map((s) => s.sessionId).sort();
+    assert.deepEqual(onDisk, [null, null, null, 'sess-a']);
+  } finally {
+    removeDir(own);
+  }
+});
+
+test('run new records CLAUDE_CODE_SESSION_ID from the environment', () => {
+  const own = makeTempDir('neat-state-session-cli-');
+  try {
+    const env = childEnv({ NEAT_PROJECT_DIR: own, NEAT_NOW: NOW.toISOString(), CLAUDE_CODE_SESSION_ID: 'sess-a' });
+    const res = runNode([HELPER, 'run', 'new', 'tag me'], { cwd: own, env });
+    assert.equal(res.status, 0, res.stderr);
+    const [state] = rs.listRuns(own);
+    assert.equal(state.sessionId, 'sess-a');
+    const plain = runNode([HELPER, 'run', 'new', 'no tag'], { cwd: own, env: childEnv({ NEAT_PROJECT_DIR: own }) });
+    assert.equal(plain.status, 0, plain.stderr);
+    assert.deepEqual(rs.listRuns(own).map((s) => s.sessionId).sort(), [null, 'sess-a']);
+  } finally {
+    removeDir(own);
+  }
+});
+
+test('activeRuns keeps unfinished runs updated within 24 hours, newest update first', () => {
+  const own = makeTempDir('neat-state-active-');
+  const hours = (h) => new Date(NOW.getTime() - h * 3600 * 1000);
+  try {
+    const old = rs.createRun(own, { task: 'old', mode: 'gate' }, hours(30));
+    const recent = rs.createRun(own, { task: 'recent', mode: 'gate' }, hours(5));
+    const newest = rs.createRun(own, { task: 'newest', mode: 'gate' }, hours(10));
+    rs.saveRun(own, newest, hours(1));
+    const finished = rs.createRun(own, { task: 'finished', mode: 'gate' }, hours(2));
+    rs.saveRun(own, rs.setStage(finished, 'done'), hours(2));
+    const cancelled = rs.createRun(own, { task: 'cancelled', mode: 'gate' }, hours(2));
+    rs.saveRun(own, rs.setStage(cancelled, 'cancelled'), hours(2));
+    const broken = rs.createRun(own, { task: 'broken', mode: 'gate' }, hours(1));
+    fs.writeFileSync(path.join(rs.runDir(own, broken.id), 'state.json'), '{ nope');
+
+    assert.equal(rs.ACTIVE_MAX_AGE_MS, 24 * 3600 * 1000);
+    assert.deepEqual(rs.activeRuns(own, NOW).map((s) => s.id), [newest.id, recent.id]);
+    assert.deepEqual(rs.activeRuns(own, NOW, { maxAgeMs: Infinity }).map((s) => s.id), [newest.id, recent.id, old.id]);
+    assert.deepEqual(rs.activeRuns(path.join(own, 'empty'), NOW), []);
+  } finally {
+    removeDir(own);
+  }
+});

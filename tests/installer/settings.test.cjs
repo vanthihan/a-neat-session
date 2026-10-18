@@ -82,6 +82,10 @@ describe('installer settings integration', () => {
   let cfg;
   let proj;
   const ruleFor = (target) => `Bash(node ${path.join(target, 'neat', 'bin', 'neat.cjs')} *)`;
+  const sessionStartFor = (target) => ({
+    matcher: 'compact|resume|clear',
+    hooks: [{ type: 'command', command: `node ${path.join(target, 'neat', 'bin', 'neat.cjs')} hook session-start`, timeout: 10 }],
+  });
   const runGlobal = (args) => runNode([INSTALLER, '--global', ...args], { cwd: proj, env: childEnv({ CLAUDE_CONFIG_DIR: cfg }) });
   const runLocal = (args) => runNode([INSTALLER, '--local', ...args], { cwd: proj, env: childEnv() });
   const readJson = (p) => JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -111,7 +115,7 @@ describe('installer settings integration', () => {
     const merged = readJson(settings);
     assert.equal(merged.model, 'opus');
     assert.deepEqual(merged.permissions.deny, ['Read(.env)']);
-    assert.deepEqual(merged.hooks, USER_SETTINGS.hooks);
+    assert.deepEqual(merged.hooks, { Stop: USER_SETTINGS.hooks.Stop, SessionStart: [sessionStartFor(cfg)] });
     assert.deepEqual(merged.permissions.allow, ['Bash(ls *)', ruleFor(cfg)]);
     assert.deepEqual(Object.keys(merged), Object.keys(USER_SETTINGS));
     assert.equal(fs.readFileSync(`${settings}.neat-bak`, 'utf8'), originalText);
@@ -138,7 +142,10 @@ describe('installer settings integration', () => {
     fs.writeFileSync(path.join(target, 'settings.json'), '{"model":"x"}\n');
     const res = runLocal([]);
     assert.equal(res.status, 0, res.stderr);
-    assert.deepEqual(readJson(path.join(target, 'settings.local.json')), { permissions: { allow: [ruleFor(target)] } });
+    assert.deepEqual(readJson(path.join(target, 'settings.local.json')), {
+      permissions: { allow: [ruleFor(target)] },
+      hooks: { SessionStart: [sessionStartFor(target)] },
+    });
     assert.equal(fs.readFileSync(path.join(target, 'settings.json'), 'utf8'), '{"model":"x"}\n');
     assert.ok(!fs.existsSync(path.join(target, 'settings.local.json.neat-bak')), 'no backup when no file existed');
   });
@@ -213,7 +220,11 @@ describe('installer settings integration', () => {
     assert.equal(m.settings.file, 'settings.json');
     assert.equal(m.settings.createdFile, true);
     assert.equal(m.settings.backup, null);
-    assert.deepEqual(m.settings.added, [{ path: ALLOW, value: ruleFor(cfg) }]);
+    assert.deepEqual(m.settings.added, [
+      { path: ALLOW, value: ruleFor(cfg) },
+      { path: ['hooks', 'SessionStart'], value: sessionStartFor(cfg) },
+    ]);
+    assert.deepEqual(m.settings.createdKeys, [['permissions'], ['permissions', 'allow'], ['hooks'], ['hooks', 'SessionStart']]);
   });
 
   test('uninstall with unparseable settings warns and still removes files', () => {
