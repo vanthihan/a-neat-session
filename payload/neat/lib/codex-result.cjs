@@ -4,11 +4,13 @@
 // Only this capped report reaches the main session: conforming Codex output
 // passes through unchanged, anything else is wrapped (first words under
 // Findings plus the full output path), and a failed job never shows the log.
+// A wrapped report keeps the worker's own Status and never upgrades it: with
+// no readable Status it says partial, never done.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const runState = require('./run-state.cjs');
-const { checkReport, checkReportFile } = require('./report-check.cjs');
+const { checkReport, checkReportFile, REPORT_STATUSES } = require('./report-check.cjs');
 
 const MAX_READ_BYTES = 1024 * 1024;
 const LOG_TAIL_BYTES = 64 * 1024;
@@ -17,6 +19,11 @@ const MAX_ERROR_LINES = 5;
 const MAX_ERROR_CHARS = 160;
 const MAX_ERROR_WORDS = 30;
 const ERROR_LINE = /\bERROR\b|error:/;
+// The first line under `## Status` (blank lines, list marks and emphasis allowed before it).
+const STATUS_IN_TEXT = new RegExp(
+  `^##[ \\t]*Status[ \\t]*\\r?\\n(?:[ \\t]*\\r?\\n)*[ \\t>*_\`-]*(${REPORT_STATUSES.join('|')})\\b`, 'im',
+);
+const NO_STATUS = 'partial';
 const HINTS = Object.freeze([
   [/\b401\b|unauthorized|not logged in/i, 'hint: run codex login'],
   [/usage limit|rate limit|\b429\b|quota/i, 'hint: Codex usage limit reached'],
@@ -50,6 +57,12 @@ function report(status, findings, artifacts) {
     '## Open questions', 'none', '',
     '## Artifacts', ...artifacts.map((a) => `- ${a}`), '',
   ].join('\n');
+}
+
+// The worker's own Status in `text`, or partial when none can be read.
+function statusOf(text) {
+  const m = STATUS_IN_TEXT.exec(String(text || ''));
+  return m ? m[1].toLowerCase() : NO_STATUS;
 }
 
 // First WRAP_WORDS words of `text`, with leading `#` stripped from every line
@@ -92,7 +105,7 @@ function buildResult(record, { outputText = null, logText = '', promptText = '' 
     if (checkReport(outputText).ok) {
       return { text: outputText.endsWith('\n') ? outputText : `${outputText}\n`, passThrough: true };
     }
-    return { text: report('done', firstWords(outputText), [record.outputPath]), passThrough: false };
+    return { text: report(statusOf(outputText), firstWords(outputText), [record.outputPath]), passThrough: false };
   }
   const findings = failureFindings(record, logText, promptText);
   return { text: report('failed', findings, [record.logPath]), passThrough: false };
@@ -109,7 +122,7 @@ function writeResult(root, record) {
   let file = runState.writeRunFile(root, record.runId, name, built.text);
   if (!built.passThrough || checkReportFile(file).ok) return { file, text: built.text };
   // Conforming text that names missing artifacts: fall back to the wrapped form.
-  const text = report('done', firstWords(outputText), [record.outputPath]);
+  const text = report(statusOf(outputText), firstWords(outputText), [record.outputPath]);
   file = runState.writeRunFile(root, record.runId, name, text);
   return { file: path.resolve(file), text };
 }

@@ -135,6 +135,22 @@ describe('result builder', () => {
     assert.ok(findings(text).includes('- job cancelled'));
   });
 
+  test('a wrapped report keeps the worker Status and never upgrades it; none read gives partial', () => {
+    const done = record(RUN_A, 'reviewer-wrap', { status: 'done', exitCode: 0 });
+    const long = Array.from({ length: 400 }, (_, i) => `w${i}`).join(' ');
+    const cases = [
+      [`## Status\nfailed\n\n## Findings\n${long}\n`, 'failed'],
+      ['## Status\n\n- **blocked** on a missing key\n', 'blocked'],
+      [`${long}\n`, 'partial'],
+    ];
+    for (const [outputText, want] of cases) {
+      const { text, passThrough } = codexResult.buildResult(done, { outputText });
+      assert.equal(passThrough, false);
+      assert.match(text, new RegExp(`^## Status\\n${want}\\n`), outputText.slice(0, 40));
+      assert.ok(checkReport(text).ok, checkReport(text).errors.join('; '));
+    }
+  });
+
   test('a 2 MB output file is read only up to 1 MB and the report stays capped', () => {
     const file = path.join(root, 'big.md');
     fs.writeFileSync(file, 'word '.repeat(2 * 1024 * 1024 / 5));

@@ -189,14 +189,14 @@ test('prompt text with shell syntax reaches codex stdin byte-exact and runs noth
   assert.deepEqual(found, []);
 });
 
-test('non-conforming output is wrapped: first 250 words under Findings plus the -o path', () => {
+test('non-conforming output is wrapped: Status partial, first 250 words under Findings plus the -o path', () => {
   const text = Array.from({ length: 400 }, (_, i) => `w${i}`).join(' ');
   const { dir, job } = startReviewer('wrap plain output', { FAKE_CODEX_OUTPUT: `# Title\n${text}\n` });
   assert.match(waitJob(job).line, /status=done exit=0/);
   const res = neat(['codex', 'result', job]);
   assert.equal(res.status, 0, res.stderr);
   const report = fs.readFileSync(path.join(dir, 'report-reviewer.md'), 'utf8');
-  assert.match(report, /^## Status\ndone\n/);
+  assert.match(report, /^## Status\npartial\n/, 'output without a Status never reads as done');
   const findings = report.split('## Findings\n')[1].split('\n## Decisions')[0];
   assert.ok(findings.includes('w248'));
   assert.ok(!findings.includes('w249'), 'only the first 250 words');
@@ -205,6 +205,18 @@ test('non-conforming output is wrapped: first 250 words under Findings plus the 
   assert.ok(words(report) <= 300);
   const check = neat(['report', 'check', path.join(dir, 'report-reviewer.md')]);
   assert.equal(check.status, 0, check.stdout);
+});
+
+test('a conforming failed report naming a missing artifact stays failed', () => {
+  const text = '## Status\nfailed\n\n## Findings\n- tests still fail\n\n## Decisions\nnone\n\n'
+    + '## Open questions\nnone\n\n## Artifacts\n- src/a.js\n';
+  const { dir, job } = startReviewer('failed with an artifact', { FAKE_CODEX_OUTPUT: text });
+  assert.match(waitJob(job).line, /status=done exit=0/);
+  const res = neat(['codex', 'result', job]);
+  assert.equal(res.status, 0, res.stderr);
+  const report = fs.readFileSync(path.join(dir, 'report-reviewer.md'), 'utf8');
+  assert.match(report, /^## Status\nfailed\n/, 'the worker said failed; the result must not say done');
+  assert.equal(neat(['report', 'check', path.join(dir, 'report-reviewer.md')]).status, 0);
 });
 
 test('a failing codex gives status=failed and a failed report naming the log', () => {
