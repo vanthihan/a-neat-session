@@ -1,0 +1,30 @@
+# Test-only denylist for the hygiene test (tests/hygiene.test.cjs).
+# Shipped package files must not name any of these terms. Matching is
+# case-insensitive on word boundaries (neighbours must not be [a-z0-9]).
+# This file lives under tests/ and is never part of the npm package.
+# Allowed by design and therefore not listed: Claude, Claude Code, Codex,
+# npm, Node.js, git.
+gsd
+get-shit-done
+everything-claude-code
+ecc
+caveman
+cavecrew
+superpowers
+claude-flow
+ruflo
+claude-squad
+oh-my-claude
+bmad
+speckit
+spec-kit
+taskmaster
+crewai
+langgraph
+autogen
+openhands
+aider
+oh-my-claudecode
+omc
+codex-plugin-cc
+opengsd
