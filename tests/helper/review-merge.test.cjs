@@ -50,6 +50,30 @@ describe('parseFindings', () => {
     assert.deepEqual(rm.parseFindings(text), []);
   });
 
+  test('reads bold or italic locations, numbered lists and table rows', () => {
+    assert.deepEqual(one('- **src/a.js:10** - high - SQL injection'), f('src/a.js', 10, 'critical', 'SQL injection'));
+    assert.deepEqual(one('- *src/a.js:10* - high - x'), f('src/a.js', 10, 'critical', 'x'));
+    assert.deepEqual(one('**`src/a.js:10`** - medium - y'), f('src/a.js', 10, 'warning', 'y'));
+    assert.deepEqual(one('__tests__/a.test.js:4 - high - z'), f('__tests__/a.test.js', 4, 'critical', 'z'));
+    assert.deepEqual(one('1. src/a.js:10 - high - x'), f('src/a.js', 10, 'critical', 'x'));
+    assert.deepEqual(one('12) src/b.js:3 - low - y'), f('src/b.js', 3, 'info', 'y'));
+    assert.deepEqual(one('| `src/a.js:10` | high | SQL injection |'), f('src/a.js', 10, 'critical', 'SQL injection'));
+    assert.deepEqual(one('| src/a.js | 10 | medium | unchecked | input |'), f('src/a.js', 10, 'warning', 'unchecked - input'));
+    assert.deepEqual(one('Makefile:3 - low - tab'), f('Makefile', 3, 'info', 'tab'));
+    const table = ['| File | Line | Severity | Issue |', '|------|-----:|----------|-------|', '| src/c.js | 2 | low | z |'].join('\n');
+    assert.deepEqual(rm.parseSource(table), { findings: [f('src/c.js', 2, 'info', 'z')], unparsed: 0 });
+  });
+
+  test('hosts and ports are not paths, and finding-like lines that do not parse are counted', () => {
+    for (const host of ['localhost:3000 - error - boom', 'example.com:443 - high - x', '127.0.0.1:80 - high - y']) {
+      assert.deepEqual(rm.parseFindings(host), [], host);
+    }
+    const text = ['## Findings', '- localhost:3000 - error - boom', '- src/a.js:1 - high - ok', 'Time: 12:30', 'none'].join('\n');
+    const res = rm.parseSource(text);
+    assert.equal(res.findings.length, 1);
+    assert.equal(res.unparsed, 1);
+  });
+
   test('normalises absolute paths under the root and a/ b/ diff prefixes', () => {
     const root = '/work/proj';
     assert.equal(one('/work/proj/src/a.js:5 - low - x', { root }).path, 'src/a.js');
@@ -265,6 +289,14 @@ describe('neat review merge', () => {
     assert.equal(res.status, 0, res.stderr);
     assert.equal(res.stdout.split('\n')[1], 'unowned=src/a.js');
     assert.equal(res.stdout.split('\n')[2].length, 200);
+  });
+
+  test('prints unparsed=N when finding-like lines could not be read', () => {
+    const { id, dir } = newRun('unparsed lines');
+    put(dir, 'review.md', '- localhost:3000 - error - boom\n- src/a.js:1 - low - fine\n', 10);
+    const res = neat(['review', 'merge', id]);
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.split('\n')[1], 'unparsed=1');
   });
 
   test('no source files gives zero counts and none', () => {

@@ -36,9 +36,20 @@ const STOPWORDS = new Set([
 ]);
 const STEM_SUFFIXES = Object.freeze(['ing', 'ed', 'es', 's']);
 
-// Optional bullet, optional backtick, path (not starting with `#`), line,
-// optional `-end` range or `:column`, then the rest of the line.
-const LOCATION = /^\s*(?:[-*+]\s+)?`?([^\s`:#\p{Cc}][^\s`:\p{Cc}]*):(\d{1,9})(?:-\d+|:\d+)?`?\s*(.*)$/u;
+// Optional bullet (`-`, `*`, `+` or `1.` / `1)`), optional emphasis (`**`,
+// `*`, `__`, `_`, closed by the same mark) and backtick, path (not starting
+// with `#`, no `*`), line, optional `-end` range or `:column`, then the rest.
+const LOCATION = /^\s*(?:(?:[-*+]|\d{1,3}[.)])\s+)?(\*\*|\*|__|_)?`?([^\s`:#*\p{Cc}][^\s`:*\p{Cc}]*):(\d{1,9})(?:-\d+|:\d+)?`?\1\s*(.*)$/u;
+// A line that names something like `name:12` where a finding would start
+// (after an optional bullet, table bar or emphasis): when it does not parse
+// it is counted as unparsed, so a lost finding shows up.
+const FINDING_LIKE = /^\s*(?:(?:[-*+]|\d{1,3}[.)])\s+|\|\s*)?[*_`]*[^\s:|]*[A-Za-z][^\s:|]*:\d/;
+// A path needs a `/` or a `.`, or is a capitalised bare name (Makefile,
+// Dockerfile). Hosts (`localhost:3000`, `example.com:443`, `127.0.0.1:80`)
+// are not paths.
+const BARE_FILE = /^[A-Z][A-Za-z0-9_-]*$/;
+const HOST_LIKE = /^(?:\d{1,3}(?:\.\d{1,3}){3}|[\w.-]+\.(?:com|org|net|edu|gov|local|internal|localhost))$/i;
+const TABLE_SEPARATOR = /^\|?[\s:|-]+$/;
 // A leading severity word followed by `:` or `-` (brackets or bold allowed).
 const SEVERITY_LEAD = /^[[(*_]*([A-Za-z]+)[\])*_]*\s*[-:–—]\s*(.*)$/;
 const CONTROL = /[\p{Cc}​-‏‪-‮⁦-⁩]/gu;
@@ -65,10 +76,35 @@ function normalizePath(raw, root) {
   return p.slice(0, MAX_PATH);
 }
 
+function isPathLike(p) {
+  if (!/[A-Za-z]/.test(p) || HOST_LIKE.test(p)) return false;
+  return /[/.]/.test(p) || BARE_FILE.test(p);
+}
+
+// A markdown table row as a finding line: `path:line` in one cell (or a path
+// cell followed by a line-number cell), a severity cell, the rest as text.
+function tableRowLine(line) {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith('|') || TABLE_SEPARATOR.test(trimmed)) return null;
+  const cells = trimmed.replace(/^\||\|$/g, '').split('|').map((c) => c.trim().replace(/^[*_`]+|[*_`]+$/g, ''));
+  let at = cells.findIndex((c) => /^[^\s:]+:\d{1,9}$/.test(c));
+  let location = at >= 0 ? cells[at] : null;
+  let used = [at];
+  if (at < 0) {
+    at = cells.findIndex((c, i) => i + 1 < cells.length && /^[^\s:]+$/.test(c) && /^\d{1,9}$/.test(cells[i + 1]));
+    if (at < 0) return null;
+    location = `${cells[at]}:${cells[at + 1]}`;
+    used = [at, at + 1];
+  }
+  const sev = cells.findIndex((c, i) => !used.includes(i) && Object.prototype.hasOwnProperty.call(SEVERITY_WORDS, c.toLowerCase()));
+  const text = cells.filter((c, i) => !used.includes(i) && i !== sev && c !== '').join(' - ');
+  return `${location} - ${sev >= 0 ? cells[sev] : 'info'} - ${text}`;
+}
+
 function parseLine(line, root) {
-  const m = LOCATION.exec(line);
-  if (!m || !/[A-Za-z]/.test(m[1])) return null;
-  let rest = m[3].replace(/^[-:–—]\s*/, '');
+  const m = LOCATION.exec(tableRowLine(line) || line);
+  if (!m || !isPathLike(m[2])) return null;
+  let rest = m[4].replace(/^[-:–—]\s*/, '');
   let severity = 'info';
   const lead = SEVERITY_LEAD.exec(rest);
   if (lead && Object.prototype.hasOwnProperty.call(SEVERITY_WORDS, lead[1].toLowerCase())) {
@@ -77,18 +113,27 @@ function parseLine(line, root) {
   }
   const text = cleanText(rest);
   if (!text) return null;
-  return { path: normalizePath(m[1], root), line: Number(m[2]), severity, text };
+  return { path: normalizePath(m[2], root), line: Number(m[3]), severity, text };
+}
+
+// Pure: { findings, unparsed } from one reviewer's text: at most
+// MAX_FINDINGS findings, and the count of lines that look like a finding
+// (see FINDING_LIKE) but could not be read as one.
+function parseSource(text, { root = null } = {}) {
+  const findings = [];
+  let unparsed = 0;
+  for (const line of String(text || '').split(/\r?\n/)) {
+    if (findings.length >= MAX_FINDINGS) break;
+    const finding = parseLine(line, root);
+    if (finding) findings.push(finding);
+    else if (FINDING_LIKE.test(line)) unparsed += 1;
+  }
+  return { findings, unparsed };
 }
 
 // Pure: findings from one reviewer's text, at most MAX_FINDINGS.
-function parseFindings(text, { root = null } = {}) {
-  const found = [];
-  for (const line of String(text || '').split(/\r?\n/)) {
-    if (found.length >= MAX_FINDINGS) break;
-    const finding = parseLine(line, root);
-    if (finding) found.push(finding);
-  }
-  return found;
+function parseFindings(text, options = {}) {
+  return parseSource(text, options).findings;
 }
 
 function stem(token) {
@@ -294,15 +339,17 @@ function nextReview(state, merged, inputs, maxRounds) {
 }
 
 // Merges the two reviewers of run `id`, writes review-merged.md, updates
-// state.review and returns { file, counts, lines, merged, review, next }.
+// state.review and returns { file, counts, lines, merged, review, next,
+// unparsed } (unparsed: finding-like lines that could not be read).
 function mergeRun(root, id, { env = process.env, now = null } = {}) {
   const state = runState.loadRun(root, id); // unknown run: UsageError before anything is read
   const { maxRounds } = config.effectiveConfig({ root, env, state }).review;
   const dir = runState.runDir(root, id);
   const a = pickSource(dir, 'reviewer', 'claude');
   const b = pickSource(dir, 'reviewer-2', 'claude-2');
-  const read = (src) => (src ? parseFindings(readCapped(src.file), { root }) : []);
-  const merged = mergeFindings(read(a), read(b), {
+  const parsed = [a, b].map((src) => (src ? parseSource(readCapped(src.file), { root }) : { findings: [], unparsed: 0 }));
+  const unparsed = parsed[0].unparsed + parsed[1].unparsed;
+  const merged = mergeFindings(parsed[0].findings, parsed[1].findings, {
     firstPresent: a !== null,
     secondPresent: b !== null,
     firstLabel: a ? a.label : 'claude',
@@ -312,7 +359,7 @@ function mergeRun(root, id, { env = process.env, now = null } = {}) {
   const review = nextReview(state, merged, fingerprint([a, b]), maxRounds);
   runState.saveRun(root, setReview(state, review), now || runState.currentTime(env));
   const next = reviewNext({ ...review, mode: state.mode });
-  return { file, counts: countMerged(merged), lines: merged.map(formatLine), merged, review, next };
+  return { file, counts: countMerged(merged), lines: merged.map(formatLine), merged, review, next, unparsed };
 }
 
 module.exports = {
@@ -324,6 +371,7 @@ module.exports = {
   MAX_TEXT,
   MERGED_FILE,
   parseFindings,
+  parseSource,
   normalizeSeverity,
   similarity,
   mergeFindings,

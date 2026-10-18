@@ -362,15 +362,17 @@ function cmdUsageCapture(args) {
 
 // Merges both reviewers' findings into review-merged.md. Prints a counts line
 // ending in the fix round and the next step, the fix tasks, files with
-// findings no task owns, the top findings and the file path (at most 9 lines).
+// findings no task owns, the count of finding-like lines that could not be
+// read, the top findings and the file path (at most 10 lines).
 function cmdReviewMerge(args) {
   if (args.length !== 1) throw new UsageError('usage: neat review merge <run-id>');
   const root = runState.projectRoot(process.env, process.cwd());
-  const { file, counts, lines, review, next } = reviewMerge.mergeRun(root, args[0], { env: process.env });
+  const { file, counts, lines, review, next, unparsed } = reviewMerge.mergeRun(root, args[0], { env: process.env });
   const fields = ['critical', 'warning', 'info', 'both', 'disputed'].map((k) => `${k}=${counts[k]}`);
   out(`merged ${fields.join(' ')} round=${review.fixRounds}/${review.maxRounds} next=${next}`);
   if (review.fixTasks.length > 0) out(`fix=${review.fixTasks.join(',')}`);
   if (review.unowned.length > 0) out(`unowned=${review.unowned.join(',')}`.slice(0, MAX_MERGE_LINE));
+  if (unparsed > 0) out(`unparsed=${unparsed}`);
   const top = lines.slice(0, MAX_MERGE_TOP).map((l) => l.slice(0, MAX_MERGE_LINE));
   out(top.length > 0 ? top.join('\n') : 'none');
   out(`file: ${file}`);
