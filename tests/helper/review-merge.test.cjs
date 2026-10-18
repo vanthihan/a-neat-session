@@ -241,6 +241,22 @@ describe('mergeRun sources', () => {
     assert.deepEqual(result.counts, { critical: 0, warning: 0, info: 2, both: 0, disputed: 0 });
   });
 
+  test('files older than the reviewer\'s brief are earlier rounds and never merged', () => {
+    const { id, dir } = newRun('stale rounds');
+    // reviewer: this round's codex job failed (no codex-reviewer.md), only last round's review.md is left.
+    put(dir, 'review.md', 'src/a.js:1 - high - fixed last round\n', 300);
+    put(dir, 'brief-reviewer.md', '# Brief: reviewer\n', 60);
+    put(dir, 'report-reviewer.md', '## Findings\n- src/a.js:2 - low - stale report\n', 200);
+    // reviewer-2: skipped this round, its brief was rewritten, its old review stays.
+    put(dir, 'brief-reviewer-2.md', '# Brief: reviewer-2\n', 60);
+    put(dir, 'review-2.md', 'src/b.js:1 - high - also from last round\n', 300);
+    assert.deepEqual(rm.mergeRun(proj, id, { env }).lines, []);
+
+    put(dir, 'review-2.md', 'src/b.js:1 - high - this round\n', 5);
+    assert.deepEqual(rm.mergeRun(proj, id, { env }).lines, ['src/b.js:1 critical [claude-2] this round'],
+      'a fresh critical is not disputed by an absent reviewer');
+  });
+
   test('reads at most 1 MB of a source file', () => {
     const { id, dir } = newRun('big source');
     const filler = `${'x'.repeat(1023)}\n`.repeat(1024);

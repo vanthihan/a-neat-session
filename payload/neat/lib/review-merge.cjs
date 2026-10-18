@@ -253,17 +253,25 @@ function mtimeOf(file) {
 }
 
 // One reviewer's source: the newer of its Codex output and its review file,
-// else its report. Returns { file, label } or null.
+// else its report. Only files written since the reviewer's brief count:
+// `brief` rewrites brief-<worker>.md at the start of every review round, so a
+// file left from an earlier round (a reviewer skipped this round, or a failed
+// Codex job) is never merged again. Returns { file, label } or null.
 function pickSource(dir, worker, claudeLabel) {
   const suffix = worker === 'reviewer' ? '' : worker.slice('reviewer'.length);
+  const since = mtimeOf(path.join(dir, `brief-${worker}.md`));
+  const freshTime = (file) => {
+    const t = mtimeOf(file);
+    return t !== null && (since === null || t >= since) ? t : null;
+  };
   const codexFile = path.join(dir, `codex-${worker}.md`);
   const reviewFile = path.join(dir, `review${suffix}.md`);
-  const codexTime = mtimeOf(codexFile);
-  const reviewTime = mtimeOf(reviewFile);
+  const codexTime = freshTime(codexFile);
+  const reviewTime = freshTime(reviewFile);
   if (codexTime !== null && (reviewTime === null || codexTime > reviewTime)) return { file: codexFile, label: 'codex' };
   if (reviewTime !== null) return { file: reviewFile, label: claudeLabel };
   const report = path.join(dir, `report-${worker}.md`);
-  return mtimeOf(report) !== null ? { file: report, label: claudeLabel } : null;
+  return freshTime(report) !== null ? { file: report, label: claudeLabel } : null;
 }
 
 function countMerged(merged) {
