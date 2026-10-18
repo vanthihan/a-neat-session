@@ -33,6 +33,7 @@ const DO_MENTIONS = [
   'propose=yes', '--research', 'Brief: ', 'subagent_type', 'AskUserQuestion', 'SendMessage', 'untrusted',
   'run commit', 'plan check', 'run guard', 'run classify', 'gate', 'auto', 'step',
   'must not contain a line NEAT_EOF', 'skipped', 'guide codex', 'target=codex', 'guide review', 'reviewer-2',
+  'context:', '/neat:resume', 'research findings',
 ];
 const BIN_CALL = /node \{\{NEAT_BIN\}\}( [^`\n]*)?/g;
 
@@ -179,6 +180,23 @@ describe('do.md', () => {
       assert.ok(launch.includes(word), `${word} missing from Launch`);
     }
     assert.ok(launch.indexOf('guide codex') < launch.indexOf('Agent tool'), 'the route check comes before any launch');
+  });
+
+  test('Rules relay context lines and pause at critical for /clear and /neat:resume without cancelling', () => {
+    const rules = body.slice(body.indexOf('## Rules'), body.indexOf('## Worker loop'));
+    const rule = rules.split('\n').find((l) => l.includes('`context:`'));
+    assert.ok(rule, 'Rules must have a context: rule');
+    for (const word of ['critical', '/clear', '/neat:resume {id}', 'no new workers', 'end your turn']) {
+      assert.ok(rule.includes(word), `${word} missing from the context rule`);
+    }
+    assert.match(rule, /without running `run stage \{id\} cancelled`/);
+    assert.ok(!/(?<!without running )`run stage \{id\} cancelled`/.test(rule), 'the critical rule must not cancel the run');
+  });
+
+  test('Finish shows research findings and the notes path when research ran', () => {
+    const finish = body.slice(body.indexOf('## Finish'));
+    assert.match(finish, /^- up to 2 research findings and the notes path, when the research stage ran/m);
+    assert.match(finish, /print at most 13 lines/);
   });
 
   test(`body is at most ${MAX_BODY_WORDS} words`, () => {
