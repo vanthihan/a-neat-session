@@ -325,7 +325,7 @@ describe('run resume and procedure through the installed helper', () => {
     ]);
     const resumed = helperRun(['run', 'resume', id]).stdout;
     assert.ok(resumed.includes('\nplan: stages=explore,plan,implement,review,test,docs implement=[T1] docs=[D1]\n'), resumed);
-    assert.ok(resumed.includes(`next: Approve - run plan show ${id} and ask for approval again`), resumed);
+    assert.ok(resumed.includes(`next: Approve - run plan view ${id}, show its output and ask for approval again`), resumed);
   });
 
   test('during a review fix round resume names the fix workers, then their Guard, then a new review round', () => {

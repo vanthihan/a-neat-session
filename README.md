@@ -214,7 +214,9 @@ routing) and picks a task type, which selects the stages:
 | `docs` | explore, plan, docs |
 
 `--research` (or accepting the offer in `gate` and `step`) adds the research
-stage. The plan splits the work into tasks that each own a set of files; tasks
+stage. The plan starts with an overview (goal, approach, up to 5 key points)
+and splits the work into tasks that each own a set of files and say why they
+are needed; tasks
 with disjoint files run in parallel, the rest in later batches. The review
 stage runs two reviewers on the same diff; see [Two reviewers](#two-reviewers).
 
@@ -429,7 +431,8 @@ starts no new workers and tells you to run `/clear` and then
 continues at the right section: `neat run resume` prints the task text, each
 worker report's status, the plan batches and the next step, and the
 orchestrator gets back a report or the plan it no longer has with
-`neat report show <run-id> <worker>` and `neat plan show <run-id>`. Context
+`neat report show <run-id> <worker>` and `neat plan show <run-id>` (or
+`neat plan view <run-id>` for the readable plan at approval). Context
 numbers come from the
 [usage capture](#usage-capture-status-line).
 

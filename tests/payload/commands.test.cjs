@@ -33,7 +33,7 @@ const DO_MENTIONS = [
   'propose=yes', '--research', 'Brief: ', 'subagent_type', 'AskUserQuestion', 'SendMessage', 'untrusted',
   'run commit', 'plan check', 'run guard', 'run classify', 'gate', 'auto', 'step',
   'must not contain a line NEAT_EOF', 'skipped', 'guide codex', 'target=codex', 'guide review', 'reviewer-2',
-  'context:', '/neat:resume', 'research findings',
+  'context:', '/neat:resume', 'research findings', 'guide plan', 'plan view',
 ];
 const BIN_CALL = /node \{\{NEAT_BIN\}\}( [^`\n]*)?/g;
 
@@ -295,6 +295,22 @@ describe('resume.md', () => {
 });
 
 describe('guides', () => {
+  test('the plan guide ships and covers the overview, key points and why lines', () => {
+    assert.ok(guideFiles().includes('plan.md'), guideFiles().join(', '));
+    const text = fs.readFileSync(path.join(GUIDES_DIR, 'plan.md'), 'utf8');
+    for (const word of ['## Overview', 'goal:', 'approach:', 'key:', 'why:', 'worker:', 'owns:', 'do:', 'plan check']) {
+      assert.ok(text.includes(word), `plan guide must mention ${word}`);
+    }
+  });
+
+  test('Approve shows the readable plan view before asking', () => {
+    const body = fs.readFileSync(path.join(REPO_ROOT, 'payload', 'commands', 'neat', 'do.md'), 'utf8');
+    const approve = body.slice(body.indexOf('## Approve'), body.indexOf('## Implement'));
+    assert.ok(approve.includes('node {{NEAT_BIN}} plan view {id}'), approve);
+    assert.ok(approve.indexOf('plan view') < approve.indexOf('AskUserQuestion'), 'the plan is shown before the question');
+    for (const option of ['Approve', 'Revise', 'Cancel']) assert.ok(approve.includes(option), option);
+  });
+
   test('the codex and review guides ship', () => {
     assert.ok(guideFiles().includes('codex.md'), guideFiles().join(', '));
     assert.ok(guideFiles().includes('review.md'), guideFiles().join(', '));

@@ -6,6 +6,7 @@
 //   ## D1: {title}          docs task (D1, D2, ...)
 //   worker: implementer|docs
 //   owns: path/a.js, path/b.js
+//   why: {optional one-line reason, shown in the plan view}
 //   do: {instructions, continuing until the next "## " line}
 
 const fs = require('node:fs');
@@ -14,7 +15,7 @@ const runState = require('./run-state.cjs');
 const { selectedOf } = require('./stages.cjs');
 
 const TASK_HEADING = /^## ([TD]\d+): (.+)$/;
-const KEY_LINE = /^\s*(worker|owns|do):\s?(.*)$/;
+const KEY_LINE = /^\s*(worker|owns|why|do):\s?(.*)$/;
 const WORKER_FOR_PREFIX = Object.freeze({ T: 'implementer', D: 'docs' });
 // `.claude` holds the pre-authorized helper and the permission settings; `.git`
 // and `.neat` are refused at any depth (nested repositories, run state).
@@ -31,7 +32,7 @@ const KINDS = Object.freeze([
 ]);
 
 function newTask(id, title) {
-  return { id, title: title.trim(), worker: null, ownsRaw: null, doLines: null, dupKeys: [] };
+  return { id, title: title.trim(), worker: null, ownsRaw: null, why: null, doLines: null, dupKeys: [] };
 }
 
 function applyKey(task, key, value) {
@@ -39,7 +40,7 @@ function applyKey(task, key, value) {
     task.doLines = [value];
     return;
   }
-  const field = key === 'owns' ? 'ownsRaw' : 'worker';
+  const field = { owns: 'ownsRaw', why: 'why' }[key] || 'worker';
   if (task[field] !== null) task.dupKeys.push(key);
   task[field] = value.trim();
 }
@@ -99,7 +100,7 @@ function validateTask(raw) {
   }
   const doText = (raw.doLines || []).join('\n').trim();
   if (doText === '') errors.push(`${raw.id}: missing do:`);
-  const task = { id: raw.id, worker: expected, title: raw.title, owns, do: doText };
+  const task = { id: raw.id, worker: expected, title: raw.title, owns, why: raw.why || '', do: doText };
   return { task, errors };
 }
 
@@ -237,5 +238,6 @@ function showPlan(root, id) {
 }
 
 module.exports = {
-  parsePlan, computeBatches, checkPlan, planBatchesLine, showPlan, isReservedPath, MAX_ERROR_LINES, MAX_SHOW_LINES,
+  parsePlan, computeBatches, checkPlan, planBatchesLine, showPlan, isReservedPath, recordedTasks, showText,
+  MAX_ERROR_LINES, MAX_SHOW_LINES,
 };

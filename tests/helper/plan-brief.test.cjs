@@ -358,7 +358,7 @@ test('plan check on a valid plan prints batches and records tasks in state.json'
   assert.equal(res.stdout, 'plan ok tasks=4 stages=explore,plan,implement,review,test,docs implement=[T1,T2] [T3] docs=[D1]\n');
   const state = readState(dir);
   assert.deepEqual(state.tasks.map((t) => [t.id, t.batch]), [['T1', 0], ['T2', 0], ['T3', 1], ['D1', 0]]);
-  assert.deepEqual(Object.keys(state.tasks[0]).sort(), ['batch', 'do', 'id', 'owns', 'title', 'worker']);
+  assert.deepEqual(Object.keys(state.tasks[0]).sort(), ['batch', 'do', 'id', 'owns', 'title', 'why', 'worker']);
 });
 
 // ---------- stage-aware plan check ----------

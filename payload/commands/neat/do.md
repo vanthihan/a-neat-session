@@ -58,7 +58,7 @@ NEAT_EOF
 Then run the Worker loop with W = `researcher` and no G, skipping its Brief step. Use its findings and notes path in the plan and in Finish.
 
 ## Plan
-Run `node {{NEAT_BIN}} run stage {id} plan`. Using only the task text and the explorer and researcher reports, write the plan, starting with the `stages ...` line:
+Run `node {{NEAT_BIN}} run stage {id} plan`, then `node {{NEAT_BIN}} guide plan` and follow it: using only the task text and the explorer and researcher reports, write the plan:
 
 ```
 node {{NEAT_BIN}} write {id} plan.md --stdin <<'NEAT_EOF'
@@ -66,13 +66,11 @@ node {{NEAT_BIN}} write {id} plan.md --stdin <<'NEAT_EOF'
 NEAT_EOF
 ```
 
-Plan format: each task starts with a heading line, `## T1: {title}` for implementer tasks (T1, T2, ...) or `## D1: {title}` for docs tasks (D1, D2, ...), followed by the lines `worker: implementer` (or `worker: docs`), `owns: {repo-relative paths, comma-separated}` and `do: {clear instructions}`. Give each file to one task where possible and group tightly coupled edits in one task, because tasks owning disjoint files run in parallel. Include implementer tasks only when the implement stage is selected and docs tasks only when the docs stage is selected (`README.md` when unsure).
-
-Run `node {{NEAT_BIN}} plan check {id}`. On exit 1, fix the plan from the error lines and write it again, at most twice; then Stop. On success keep the line `plan ok tasks={n} stages=... implement=[...] docs=[...]`: each bracket is a batch.
+Then run `plan check` as the guide says.
 
 ## Approve
-gate and step: ask with AskUserQuestion, showing at most 15 lines (the stages, task ids, titles, owned files and the batches from plan check), with options Approve / Revise / Cancel.
-- Revise: ask what to change, rewrite plan.md, run `node {{NEAT_BIN}} plan check {id}` and ask again.
+gate and step: run `node {{NEAT_BIN}} plan view {id}` and show its output to the user unchanged as message text (it is already formatted), then ask with AskUserQuestion with options Approve / Revise / Cancel.
+- Revise: ask what to change, rewrite plan.md, run `node {{NEAT_BIN}} plan check {id}`, show the plan view again and ask again.
 - Cancel: Stop.
 
 auto: skip this section without asking.

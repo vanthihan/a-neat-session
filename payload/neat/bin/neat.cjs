@@ -36,6 +36,7 @@ const reportCheck = require(path.join(LIB, 'report-check.cjs'));
 const { parseTaskArgs, UsageError, MODES } = require(path.join(LIB, 'cli-args.cjs'));
 const { formatStatus } = require(path.join(LIB, 'status.cjs'));
 const planCheck = require(path.join(LIB, 'plan-check.cjs'));
+const planView = require(path.join(LIB, 'plan-view.cjs'));
 const brief = require(path.join(LIB, 'brief.cjs'));
 const gitOps = require(path.join(LIB, 'git-ops.cjs'));
 const route = require(path.join(LIB, 'route.cjs'));
@@ -67,6 +68,7 @@ const HELP = [
   'neat stages <run-id> --type <small-fix|feature|refactor|research|docs> [--research] [--mode gate|auto|step]',
   'neat plan check <run-id>',
   'neat plan show <run-id>',
+  'neat plan view <run-id>',
   'neat brief <run-id> <worker> [--stdin] [--fix]',
   'neat route <run-id> <worker|--all>',
   'neat write <run-id> <file-name> --stdin',
@@ -403,6 +405,12 @@ function cmdPlanCheck(args) {
   return printResult(planCheck.checkPlan(root, args[0], runState.currentTime(process.env)));
 }
 
+function cmdPlanView(args) {
+  if (args.length !== 1) throw new UsageError('usage: neat plan view <run-id>');
+  const root = runState.projectRoot(process.env, process.cwd());
+  return printResult(planView.viewPlan(root, args[0]));
+}
+
 function cmdPlanShow(args) {
   if (args.length !== 1) throw new UsageError('usage: neat plan show <run-id>');
   const root = runState.projectRoot(process.env, process.cwd());
@@ -533,6 +541,7 @@ function dispatch(argv) {
   if (cmd === 'stages') return cmdStages(argv.slice(1));
   if (cmd === 'plan' && sub === 'check') return cmdPlanCheck(rest);
   if (cmd === 'plan' && sub === 'show') return cmdPlanShow(rest);
+  if (cmd === 'plan' && sub === 'view') return cmdPlanView(rest);
   if (cmd === 'brief') return cmdBrief(argv.slice(1));
   if (cmd === 'config') return cmdConfig(sub, rest);
   if (cmd === 'route') return cmdRoute(argv.slice(1));
