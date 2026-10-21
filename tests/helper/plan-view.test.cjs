@@ -87,17 +87,24 @@ describe('why lines', () => {
 describe('neat plan view', () => {
   test('shows goal, approach, key points, stages, tasks with reasons and the run order', () => {
     const out = view(checkedRun(`${OVERVIEW}\n\n${TASKS}\n`));
-    assert.match(out, /^### Plan: add a subtract command$/m);
-    assert.match(out, /^\*\*Goal:\*\* Let users subtract numbers from the CLI\.$/m);
-    assert.match(out, /^\*\*Approach:\*\* Add a pure function first/m);
-    assert.match(out, /^- \*\*Risk:\*\* the CLI parser is shared with the add command$/m);
-    assert.match(out, /^- \*\*Decision:\*\* keep integers only for now$/m);
-    assert.match(out, /^- \*\*Assumption:\*\* no callers rely on the old exit code$/m);
-    assert.match(out, /^\*\*Stages:\*\* explore → plan → implement → review → test → docs \(skipped: research\)$/m);
-    assert.match(out, /^\| T1 \| Add subtract \| implementer \| src\/math\.js \| the CLI needs a tested pure function to call \|$/m);
-    assert.match(out, /^\| D1 \| Document --sub \| docs \| README\.md \| - \|$/m);
-    assert.match(out, /^\*\*Run order:\*\* T1 \+ T2 in parallel, then D1$/m);
-    assert.match(out, /^3 tasks, 3 files\.$/m);
+    assert.match(out, /^Plan: add a subtract command$/m);
+    assert.match(out, /^Goal {6}Let users subtract numbers from the CLI\.$/m);
+    assert.match(out, /^Approach {2}Add a pure function first/m);
+    assert.match(out, /^Key points$/m);
+    assert.match(out, /^ {2}! Risk {8}the CLI parser is shared with the add command$/m);
+    assert.match(out, /^ {2}\* Decision {4}keep integers only for now$/m);
+    assert.match(out, /^ {2}\? Assumption {2}no callers rely on the old exit code$/m);
+    assert.match(out, /^Stages {3}explore > plan > implement > review > test > docs$/m);
+    assert.match(out, /^ {9}\(skipped: research\)$/m);
+    assert.match(out, /^ {2}T1 {2}Add subtract {9}implementer$/m);
+    assert.match(out, /^ {6}files {2}src\/math\.js$/m);
+    assert.match(out, /^ {6}why {4}the CLI needs a tested pure function to call$/m);
+    assert.match(out, /^ {2}D1 {2}Document --sub {7}docs$/m);
+    assert.match(out, /^Run order {2}T1 \+ T2 in parallel, then D1$/m);
+    assert.match(out, /^ {11}3 tasks, 3 files$/m);
+    assert.ok(!/\*\*|^#|^\| /m.test(out), 'no markdown markup');
+    assert.ok(!out.includes('\u001b'), 'no color unless asked');
+    assert.ok(out.split('\n').every((l) => l.length <= 100), 'lines fit a terminal');
   });
 
   test('skipped stages are listed and a plan without an overview still shows its tasks', () => {
@@ -107,10 +114,11 @@ describe('neat plan view', () => {
     fs.writeFileSync(path.join(proj, '.neat', 'runs', id, 'plan.md'), `${TASKS.split('\n\n')[0]}\n`);
     assert.equal(neat(['plan', 'check', id]).status, 0);
     const out = view(id);
-    assert.match(out, /^\*\*Stages:\*\* explore → plan → implement → test \(skipped: research, review, docs\)$/m);
-    assert.match(out, /^_No overview in plan\.md\._$/m);
-    assert.match(out, /^\| T1 \| Add subtract \|/m);
-    assert.match(out, /^\*\*Run order:\*\* T1$/m);
+    assert.match(out, /^Stages {3}explore > plan > implement > test$/m);
+    assert.match(out, /^ {9}\(skipped: research, review, docs\)$/m);
+    assert.match(out, /^\(no overview in plan\.md\)$/m);
+    assert.match(out, /^ {2}T1 {2}Add subtract/m);
+    assert.match(out, /^Run order {2}T1$/m);
   });
 
   test('untrusted text is cleaned: pipes escaped, control codes dropped, key points capped', () => {
@@ -118,11 +126,21 @@ describe('neat plan view', () => {
     const plan = `## Overview\ngoal: a | b \u001b[31mred\u001b[0m\n${keys}\n\n${TASKS.replace('owns: src/math.js', 'owns: src/a|b.js')}\n`;
     const out = view(checkedRun(plan));
     assert.ok(!out.includes('\u001b'), out);
-    assert.match(out, /^\*\*Goal:\*\* a \| b red$/m);
-    assert.match(out, /src\/a\\\|b\.js/);
-    assert.equal((out.match(/^- \*\*Note:\*\*/gm) || []).length, 5);
-    assert.match(out, /^- … 3 more key points in plan\.md$/m);
+    assert.match(out, /^Goal {6}a \| b red$/m);
+    assert.match(out, /files {2}src\/a\|b\.js/);
+    assert.equal((out.match(/^ {2}- Note {8}/gm) || []).length, 5);
+    assert.match(out, /^ {2}… 3 more key points in plan\.md$/m);
     assert.ok(out.trimEnd().split('\n').length <= MAX_VIEW_LINES, out);
+  });
+
+  test('--color adds ANSI highlights over the same text', () => {
+    const id = checkedRun(`${OVERVIEW}\n\n${TASKS}\n`);
+    const plain = view(id);
+    const res = neat(['plan', 'view', id, '--color']);
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(res.stdout.includes('\u001b['), 'colored output');
+    assert.equal(res.stdout.replace(/\u001b\[[0-9;]*m/g, ''), plain);
+    assert.equal(neat(['plan', 'view', id, '--bogus']).status, 2);
   });
 
   test('a run without a checked plan fails with a hint; usage errors exit 2', () => {

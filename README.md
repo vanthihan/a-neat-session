@@ -156,6 +156,40 @@ changes. It then implements, reviews, tests, updates the docs, commits the
 files the plan owned and prints a summary of at most 13 lines with the run
 directory for details.
 
+Before asking, it prints the plan as aligned plain text (`neat plan view`):
+
+```text
+Plan: add a --dry-run option to the export command
+
+Goal      Let users preview an export without writing files.
+Approach  Add the flag to the parser, skip the write step when it is set.
+
+Key points
+  ! Risk        the export command shares its parser with import
+  * Decision    dry run prints the file list, not the file contents
+
+Stages   explore > plan > implement > review > test > docs
+         (skipped: research)
+
+Tasks
+  T1  Add --dry-run       implementer
+      files  src/export.js
+      why    users need a safe preview
+  D1  Document --dry-run  docs
+      files  README.md
+      why    new flag must be discoverable
+
+Run order  T1, then D1
+           2 tasks, 2 files
+```
+
+The goal, approach, key points (risks, decisions, assumptions) and each task's
+`why` come from the plan the orchestrator writes; choose Revise to change any
+of them. For the same view with colored highlights (risks red, decisions
+green, assumptions magenta, task ids yellow), run the line printed under the
+plan, for example `! node ~/.claude/neat/bin/neat.cjs plan view <run-id> --color`;
+the `!` prefix runs it in the session and shows you the output.
+
 Check progress at any time with `/neat:status`.
 
 ## Commands

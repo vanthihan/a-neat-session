@@ -307,6 +307,8 @@ describe('guides', () => {
     const body = fs.readFileSync(path.join(REPO_ROOT, 'payload', 'commands', 'neat', 'do.md'), 'utf8');
     const approve = body.slice(body.indexOf('## Approve'), body.indexOf('## Implement'));
     assert.ok(approve.includes('node {{NEAT_BIN}} plan view {id}'), approve);
+    assert.ok(approve.includes('```text'), 'shown in a text block so alignment survives');
+    assert.ok(approve.includes('plan view {id} --color'), 'offers the colored view');
     assert.ok(approve.indexOf('plan view') < approve.indexOf('AskUserQuestion'), 'the plan is shown before the question');
     for (const option of ['Approve', 'Revise', 'Cancel']) assert.ok(approve.includes(option), option);
   });

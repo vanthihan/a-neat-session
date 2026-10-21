@@ -68,7 +68,7 @@ const HELP = [
   'neat stages <run-id> --type <small-fix|feature|refactor|research|docs> [--research] [--mode gate|auto|step]',
   'neat plan check <run-id>',
   'neat plan show <run-id>',
-  'neat plan view <run-id>',
+  'neat plan view <run-id> [--color]',
   'neat brief <run-id> <worker> [--stdin] [--fix]',
   'neat route <run-id> <worker|--all>',
   'neat write <run-id> <file-name> --stdin',
@@ -406,9 +406,11 @@ function cmdPlanCheck(args) {
 }
 
 function cmdPlanView(args) {
-  if (args.length !== 1) throw new UsageError('usage: neat plan view <run-id>');
+  const [id, ...flags] = args;
+  const ok = id && !id.startsWith('-') && flags.every((f) => f === '--color') && flags.length <= 1;
+  if (!ok) throw new UsageError('usage: neat plan view <run-id> [--color]');
   const root = runState.projectRoot(process.env, process.cwd());
-  return printResult(planView.viewPlan(root, args[0]));
+  return printResult(planView.viewPlan(root, id, { color: flags.includes('--color') }));
 }
 
 function cmdPlanShow(args) {
