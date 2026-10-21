@@ -113,7 +113,88 @@ function orderLines(tasks, paint) {
   ];
 }
 
-function viewPlan(root, id, { color = false } = {}) {
+// ---------- markdown view (rendered with highlights in the session) ----------
+
+const KEY_DOT = Object.freeze({ Risk: '🔴', Decision: '🟢', Assumption: '🟡', Note: '⚪' });
+const MD_SPECIAL = /[\\*_~[\]<>#|]/g;
+
+// Markdown is escaped; balanced backticks stay as code spans (highlighted),
+// an unbalanced one becomes a quote so it cannot swallow the rest of the line.
+function md(value, max) {
+  const text = clean(value, max).replace(MD_SPECIAL, (c) => `\\${c}`);
+  return (text.match(/`/g) || []).length % 2 === 0 ? text : text.replace(/`/g, "'");
+}
+
+// Inline code cannot escape a backtick, so one inside a value becomes a quote.
+function code(value, max = MAX_TEXT) {
+  return `\`${clean(value, max).replace(/`/g, "'")}\``;
+}
+
+function mdOverview(overview) {
+  if (!overview.found) return ['_No overview in plan.md._'];
+  const lines = [];
+  if (overview.goal) lines.push(`**Goal:** ${md(overview.goal, MAX_TEXT)}`);
+  if (overview.approach) {
+    if (lines.length > 0) lines.push('');
+    lines.push(`**Approach:** ${md(overview.approach, MAX_TEXT)}`);
+  }
+  if (overview.keys.length > 0) {
+    if (lines.length > 0) lines.push('');
+    lines.push('**Key points**');
+    for (const raw of overview.keys.slice(0, MAX_KEYS)) {
+      const tagged = String(raw).match(KEY_TAG);
+      const label = tagged ? tagged[1][0].toUpperCase() + tagged[1].slice(1).toLowerCase() : 'Note';
+      lines.push(`- ${KEY_DOT[label]} **${label}:** ${md(tagged ? tagged[2] : raw, MAX_TEXT)}`);
+    }
+    const extra = overview.keys.length - MAX_KEYS;
+    if (extra > 0) lines.push(`- _… ${extra} more key points in plan.md_`);
+  }
+  return lines;
+}
+
+function mdStages(state) {
+  const selected = selectedOf(state);
+  const skipped = runState.PIPELINE.filter((name) => !selected.includes(name));
+  const tail = skipped.length > 0 ? ` · skipped: ${skipped.map((n) => `~~${n}~~`).join(', ')}` : '';
+  return `**Stages:** ${selected.map((n) => `\`${n}\``).join(' → ')}${tail}`;
+}
+
+function mdTasks(tasks) {
+  const lines = ['**Tasks**'];
+  for (const t of tasks.slice(0, MAX_TASKS)) {
+    lines.push(`- \`${t.id}\` **${md(t.title, MAX_TITLE)}** · _${t.worker}_`);
+    lines.push(`  - files: ${t.owns.slice(0, 6).map((f) => code(f)).join(', ')}${t.owns.length > 6 ? ' …' : ''}`);
+    if (t.why) lines.push(`  - why: ${md(t.why, MAX_TEXT)}`);
+  }
+  if (tasks.length > MAX_TASKS) lines.push(`- _… ${tasks.length - MAX_TASKS} more tasks in plan.md_`);
+  return lines;
+}
+
+function mdOrder(tasks) {
+  const batches = computeBatches(tasks);
+  const steps = [...batches.implement, ...batches.docs].map((group) => {
+    const ids = group.map((tid) => `\`${tid}\``).join(' + ');
+    return group.length > 1 ? `${ids} in parallel` : ids;
+  });
+  const files = new Set(tasks.flatMap((t) => t.owns));
+  return `**Run order:** ${steps.join(' → ')} · ${tasks.length} tasks, ${files.size} files`;
+}
+
+function markdownLines(state, tasks, text, title) {
+  return [
+    `### 📋 Plan: ${md(title, MAX_TEXT)}`,
+    '',
+    ...mdOverview(readOverview(text)),
+    '',
+    mdStages(state),
+    '',
+    ...mdTasks(tasks),
+    '',
+    mdOrder(tasks),
+  ];
+}
+
+function viewPlan(root, id, { color = false, markdown = false } = {}) {
   const state = runState.loadRun(root, id);
   const tasks = recordedTasks(state);
   if (tasks.length === 0) return { ok: false, lines: [`no checked plan in run ${id}; run plan check ${id}`] };
@@ -121,6 +202,7 @@ function viewPlan(root, id, { color = false } = {}) {
   const file = path.join(runState.runDir(root, id), 'plan.md');
   const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '';
   const title = clean(String(state.task || '').split('\n')[0], MAX_TEXT) || id;
+  if (markdown) return { ok: true, lines: markdownLines(state, tasks, text, title).slice(0, MAX_VIEW_LINES) };
   const lines = [
     paint('title', `Plan: ${title}`),
     '',

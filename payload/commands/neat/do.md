@@ -69,7 +69,7 @@ NEAT_EOF
 Then run `plan check` as the guide says.
 
 ## Approve
-gate and step: run `node {{NEAT_BIN}} plan view {id}` and show its output to the user unchanged inside a ```text code block (it is aligned plain text), followed by one line: `Colored view: ! node {{NEAT_BIN}} plan view {id} --color`. Then ask with AskUserQuestion with options Approve / Revise / Cancel.
+gate and step: run `node {{NEAT_BIN}} plan view {id} --md` and show its output to the user unchanged as message text, not in a code block (it is styled markdown). Then ask with AskUserQuestion with options Approve / Revise / Cancel.
 - Revise: ask what to change, rewrite plan.md, run `node {{NEAT_BIN}} plan check {id}`, show the plan view again and ask again.
 - Cancel: Stop.
 

@@ -127,7 +127,7 @@ function planStep(state) {
     return step('Plan', `run ${shows.join(' and ')}, write plan.md from the task text and those reports, then plan check ${id}`);
   }
   if (state.mode === 'gate' || state.mode === 'step') {
-    return step('Approve', `run plan view ${id}, show its output and ask for approval again; approval is not kept on disk`);
+    return step('Approve', `run plan view ${id} --md, show its output and ask for approval again; approval is not kept on disk`);
   }
   return advance(state, 'plan');
 }

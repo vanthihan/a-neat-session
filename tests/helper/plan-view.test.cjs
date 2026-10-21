@@ -143,6 +143,34 @@ describe('neat plan view', () => {
     assert.equal(neat(['plan', 'view', id, '--bogus']).status, 2);
   });
 
+  test('--md renders styled markdown: headings, bold labels, code spans, colored markers, struck-out skipped stages', () => {
+    const id = checkedRun(`${OVERVIEW}\n\n${TASKS}\n`);
+    const res = neat(['plan', 'view', id, '--md']);
+    assert.equal(res.status, 0, res.stderr);
+    const out = res.stdout;
+    assert.match(out, /^### 📋 Plan: add a subtract command$/m);
+    assert.match(out, /^\*\*Goal:\*\* Let users subtract numbers from the CLI\.$/m);
+    assert.match(out, /^- 🔴 \*\*Risk:\*\* the CLI parser is shared with the add command$/m);
+    assert.match(out, /^- 🟢 \*\*Decision:\*\* keep integers only for now$/m);
+    assert.match(out, /^- 🟡 \*\*Assumption:\*\* no callers rely on the old exit code$/m);
+    assert.match(out, /^\*\*Stages:\*\* `explore` → `plan` → `implement` → `review` → `test` → `docs` · skipped: ~~research~~$/m);
+    assert.match(out, /^- `T1` \*\*Add subtract\*\* · _implementer_$/m);
+    assert.match(out, /^ {2}- files: `src\/math\.js`$/m);
+    assert.match(out, /^ {2}- why: the CLI needs a tested pure function to call$/m);
+    assert.match(out, /^\*\*Run order:\*\* `T1` \+ `T2` in parallel → `D1` · 3 tasks, 3 files$/m);
+    assert.ok(!out.includes('\u001b'));
+  });
+
+  test('--md escapes markdown in untrusted plan text', () => {
+    const plan = `## Overview\ngoal: **bold** _x_ [link](http://e) \`tick\` <b>\n\n${TASKS.replace('owns: src/math.js', 'owns: src/a`b.js')}\n`;
+    const out = neat(['plan', 'view', checkedRun(plan), '--md']).stdout;
+    assert.match(out, /^\*\*Goal:\*\* \\\*\\\*bold\\\*\\\* \\_x\\_ \\\[link\\\]\(http:\/\/e\) `tick` \\<b\\>$/m);
+    assert.match(out, /files: `src\/a'b\.js`/);
+    const odd = `## Overview\ngoal: one \` tick\n\n${TASKS}\n`;
+    assert.match(neat(['plan', 'view', checkedRun(odd), '--md']).stdout, /^\*\*Goal:\*\* one ' tick$/m);
+    assert.equal(neat(['plan', 'view', 'x', '--md', '--color']).status, 2);
+  });
+
   test('a run without a checked plan fails with a hint; usage errors exit 2', () => {
     const res = neat(['run', 'new', '--stdin'], 'nothing planned');
     const id = res.stdout.match(/^id=(\S+)/m)[1];

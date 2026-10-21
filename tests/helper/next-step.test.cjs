@@ -114,7 +114,7 @@ describe('nextStep', () => {
     const tasks = [T('T1', 'implementer', 1)];
     for (const mode of ['gate', 'step']) {
       assert.deepEqual(nextStep(makeState({ stage: 'plan', mode, tasks }), facts()), {
-        section: 'Approve', line: `run plan view ${ID}, show its output and ask for approval again; approval is not kept on disk`,
+        section: 'Approve', line: `run plan view ${ID} --md, show its output and ask for approval again; approval is not kept on disk`,
       });
     }
     assert.deepEqual(nextStep(makeState({ stage: 'plan', mode: 'auto', tasks }), facts()), {

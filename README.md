@@ -156,39 +156,35 @@ changes. It then implements, reviews, tests, updates the docs, commits the
 files the plan owned and prints a summary of at most 13 lines with the run
 directory for details.
 
-Before asking, it prints the plan as aligned plain text (`neat plan view`):
+Before asking, it shows the plan as styled text (`neat plan view <run-id> --md`),
+which Claude Code renders with highlights:
 
-```text
-Plan: add a --dry-run option to the export command
+> ### 📋 Plan: add a --dry-run option to the export command
+>
+> **Goal:** Let users preview an export without writing files.
+>
+> **Approach:** Add the flag to the parser, skip the write step when it is set.
+>
+> **Key points**
+> - 🔴 **Risk:** the export command shares its parser with import
+> - 🟢 **Decision:** dry run prints the file list, not the file contents
+>
+> **Stages:** `explore` → `plan` → `implement` → `review` → `test` → `docs` · skipped: ~~research~~
+>
+> **Tasks**
+> - `T1` **Add --dry-run** · _implementer_
+>   - files: `src/export.js`
+>   - why: users need a safe preview
+> - `D1` **Document --dry-run** · _docs_
+>   - files: `README.md`
+>   - why: new flag must be discoverable
+>
+> **Run order:** `T1` → `D1` · 2 tasks, 2 files
 
-Goal      Let users preview an export without writing files.
-Approach  Add the flag to the parser, skip the write step when it is set.
-
-Key points
-  ! Risk        the export command shares its parser with import
-  * Decision    dry run prints the file list, not the file contents
-
-Stages   explore > plan > implement > review > test > docs
-         (skipped: research)
-
-Tasks
-  T1  Add --dry-run       implementer
-      files  src/export.js
-      why    users need a safe preview
-  D1  Document --dry-run  docs
-      files  README.md
-      why    new flag must be discoverable
-
-Run order  T1, then D1
-           2 tasks, 2 files
-```
-
-The goal, approach, key points (risks, decisions, assumptions) and each task's
-`why` come from the plan the orchestrator writes; choose Revise to change any
-of them. For the same view with colored highlights (risks red, decisions
-green, assumptions magenta, task ids yellow), run the line printed under the
-plan, for example `! node ~/.claude/neat/bin/neat.cjs plan view <run-id> --color`;
-the `!` prefix runs it in the session and shows you the output.
+The goal, approach, key points (🔴 risk, 🟢 decision, 🟡 assumption) and each
+task's `why` come from the plan the orchestrator writes; choose Revise to
+change any of them. In a shell, `neat plan view <run-id>` prints the same plan
+as aligned plain text, and `--color` adds ANSI colors to it.
 
 Check progress at any time with `/neat:status`.
 
@@ -466,7 +462,7 @@ continues at the right section: `neat run resume` prints the task text, each
 worker report's status, the plan batches and the next step, and the
 orchestrator gets back a report or the plan it no longer has with
 `neat report show <run-id> <worker>` and `neat plan show <run-id>` (or
-`neat plan view <run-id>` for the readable plan at approval). Context
+`neat plan view <run-id> --md` for the readable plan at approval). Context
 numbers come from the
 [usage capture](#usage-capture-status-line).
 
