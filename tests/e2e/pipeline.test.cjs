@@ -253,14 +253,14 @@ describe('gate mode: one commit per run', () => {
 
     const commits = newCommits(project);
     assert.equal(commits.length, 1, commits.join('\n'));
-    assert.ok(commits[0].startsWith('neat: '), commits[0]);
+    assert.match(commits[0], /^chore: /);
     assert.deepEqual(committedFiles(project, 'HEAD'), OWNED);
     assertFinished(project, run);
   });
 });
 
 describe('step mode: commits after implement and after docs', () => {
-  test('two neat commits, src files first and README.md second', () => {
+  test('two commits, src files first and README.md second', () => {
     const project = makeProject();
     const run = startRun(project, 'step');
     explore(project, run.id);
@@ -275,7 +275,8 @@ describe('step mode: commits after implement and after docs', () => {
 
     const commits = newCommits(project);
     assert.equal(commits.length, 2, commits.join('\n'));
-    assert.ok(commits.every((s) => s.startsWith('neat: ')), commits.join('\n'));
+    assert.match(commits[1], /^chore: /);
+    assert.match(commits[0], /^docs: /);
     assert.deepEqual(committedFiles(project, 'HEAD~1'), ['src/a.js', 'src/b.js']);
     assert.deepEqual(committedFiles(project, 'HEAD'), ['README.md']);
     assertFinished(project, run);
@@ -365,7 +366,7 @@ describe('gate mode small fix: only explore, plan, implement and test run', () =
 
     const commits = newCommits(project);
     assert.equal(commits.length, 1, commits.join('\n'));
-    assert.ok(commits[0].startsWith('neat: '), commits[0]);
+    assert.match(commits[0], /^fix: /);
     assert.deepEqual(committedFiles(project, 'HEAD'), ['src/a.js']);
     assertFinished(project, run, 3, ['?? coverage/']);
     const reports = fs.readdirSync(run.dir).filter((f) => /^report-.*\.md$/.test(f)).sort();

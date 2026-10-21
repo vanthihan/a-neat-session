@@ -356,8 +356,7 @@ test('commit stages exactly the guarded owned changes', () => {
   const files = git(dir, ['show', '--name-only', '--format=', 'HEAD']).trim().split('\n').sort();
   assert.deepEqual(files, ['a.js', 'new.js']);
   const message = git(dir, ['log', '-1', '--format=%B']);
-  assert.match(message, /^neat: change the code\n/);
-  assert.ok(message.includes(`Run: ${run.id}`));
+  assert.equal(message.trim(), 'chore: change the code');
   const status = git(dir, ['status', '--porcelain']);
   assert.match(status, /p\.txt/);
   assert.match(status, /z\.js/);
@@ -370,6 +369,44 @@ test('commit stages exactly the guarded owned changes', () => {
   const again = neat(dir, ['run', 'commit', run.id]);
   assert.equal(again.status, 0);
   assert.equal(again.stdout.trim(), 'commit skip: no owned changes');
+});
+
+function commitSubject(dir, taskText, type) {
+  const run = plannedRun(dir, PLAN, taskText);
+  if (type) assert.equal(neat(dir, ['stages', run.id, '--type', type]).status, 0);
+  write(dir, 'a.js', 'two\n');
+  assert.equal(neat(dir, ['run', 'guard', run.id, '--tasks', 'T1']).status, 0);
+  const res = neat(dir, ['run', 'commit', run.id]);
+  assert.equal(res.status, 0, res.stdout + res.stderr);
+  return git(dir, ['log', '-1', '--format=%B']).trim();
+}
+
+test('commit type follows the task type', () => {
+  const cases = [
+    ['small-fix', 'fix: handle an empty list'],
+    ['feature', 'feat: handle an empty list'],
+    ['refactor', 'refactor: handle an empty list'],
+  ];
+  for (const [type, expected] of cases) {
+    assert.equal(commitSubject(makeRepo(), 'Handle an empty list.', type), expected, type);
+  }
+});
+
+test('commit subject keeps acronyms and trims to one short line', () => {
+  assert.equal(commitSubject(makeRepo(), 'README: add install steps\nmore detail', 'docs'), 'docs: README: add install steps');
+  const long = commitSubject(makeRepo(), `add ${'x'.repeat(100)}`, 'feature');
+  assert.equal(long.split('\n').length, 1);
+  assert.ok(long.length <= 'feat: '.length + 60, long);
+});
+
+test('commit uses a plain subject when the repo history is not conventional', () => {
+  const dir = makeRepo();
+  for (const msg of ['Tweak a', 'Update readme', 'Bump p', 'More work']) {
+    write(dir, 'README.md', `# ${msg}\n`);
+    git(dir, ['commit', '-q', '-am', msg]);
+  }
+  write(dir, 'p.txt', 'p dirty before the run\n');
+  assert.equal(commitSubject(dir, 'handle an empty list', 'feature'), 'Handle an empty list');
 });
 
 function failingHook(dir) {

@@ -526,6 +526,12 @@ ignored yet; add it so run files never end up in a commit.
 - Only the orchestrator commits, through `neat run commit`, and only the files
   the plan tasks owned that actually changed. Files with uncommitted changes
   before the run are never committed.
+- Commit messages follow your repository's style. By default the subject is a
+  Conventional Commit, `<type>: <first line of the task>`, with the type taken
+  from the task type: `fix` (small fix), `feat` (feature), `refactor`,
+  `docs` (docs or research), otherwise `chore`; in `step` mode the docs-stage
+  commit is `docs`. When most of the last 20 commit subjects are not in that
+  form, the subject is the task's first line as a plain sentence instead.
 - After every batch the ownership guard compares the working tree with the
   plan. Changes outside the owned files, or to git hooks, git config, the
   installed helper, agents, commands or guides, or your Claude Code settings,

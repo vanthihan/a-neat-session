@@ -205,9 +205,48 @@ function writeDiff(root, id) {
   return { file, files, lines: countLines(patch) };
 }
 
-function subjectOf(task) {
-  const first = String(task).split('\n')[0].trim();
-  return `neat: ${first.slice(0, MAX_SUBJECT)}`;
+// Conventional Commit type for each task type; a step-mode docs-stage commit is docs.
+const COMMIT_TYPES = Object.freeze({
+  'small-fix': 'fix',
+  feature: 'feat',
+  refactor: 'refactor',
+  docs: 'docs',
+  research: 'docs',
+});
+const CONVENTIONAL = /^[a-z]+(\([^)]*\))?!?: \S/;
+const HISTORY_SAMPLE = 20;
+const HISTORY_MIN = 5;
+
+function commitType(state) {
+  if (state.mode === 'step' && state.stage === 'docs') return 'docs';
+  return COMMIT_TYPES[state.type] || 'chore';
+}
+
+// First task line, without a trailing period, capped; the first letter is
+// lowercased unless it starts an acronym.
+function describeTask(task) {
+  const first = String(task).split('\n')[0].trim().replace(/[.\s]+$/, '').slice(0, MAX_SUBJECT).trim();
+  if (!first) return 'update';
+  return /^[A-Z][a-z]/.test(first) ? first[0].toLowerCase() + first.slice(1) : first;
+}
+
+// Follow the repo's own style: Conventional Commits unless most recent
+// non-merge subjects clearly use something else.
+function usesConventional(root) {
+  let subjects;
+  try {
+    subjects = gitLib.git(root, ['log', `-${HISTORY_SAMPLE}`, '--no-merges', '--format=%s']).split('\n').filter(Boolean);
+  } catch {
+    return true;
+  }
+  if (subjects.length < HISTORY_MIN) return true;
+  return subjects.filter((s) => CONVENTIONAL.test(s)).length * 2 >= subjects.length;
+}
+
+function subjectOf(root, state) {
+  const text = describeTask(state.task);
+  if (usesConventional(root)) return `${commitType(state)}: ${text}`;
+  return text[0].toUpperCase() + text.slice(1);
 }
 
 function stagedPaths(root, paths) {
@@ -252,7 +291,7 @@ function commitRun(root, id, now) {
     gitLib.git(root, [LITERAL, 'add', '-A', '--', ...candidates]);
     files = stagedPaths(root, candidates);
     if (files.length === 0) return { ok: true, lines: ['commit skip: no owned changes'] };
-    gitLib.git(root, [LITERAL, 'commit', '-q', '-m', subjectOf(state.task), '-m', `Run: ${id}`, '--', ...files]);
+    gitLib.git(root, [LITERAL, 'commit', '-q', '-m', subjectOf(root, state), '--', ...files]);
   } catch (err) {
     unstage(root, candidates);
     return failure(err);
